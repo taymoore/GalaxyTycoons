@@ -1,33 +1,27 @@
+from typing import List
 import logging
 from PySide6.QtCore import (
     Slot,
     Signal,
     QThread,
     Qt,
-    QCoreApplication,
     QAbstractTableModel,
     QSortFilterProxyModel,
     QObject,
     QModelIndex,
     QPersistentModelIndex,
-    QSize,
 )
 
 from PySide6.QtWidgets import (
     QHeaderView,
     QTableView,
     QAbstractItemView,
-    QApplication,
-    QMainWindow,
-    QPushButton,
     QVBoxLayout,
     QWidget,
-    QTextEdit,
-    QTableWidget,
-    QTabWidget,
 )
+from PySide6.QtGui import QCloseEvent
 
-from api.gameData import get_gamedata
+from api.gameData import get_gamedata, get_item_name
 from api.models.gameData import Recipe
 from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
@@ -40,14 +34,26 @@ class RecipeWindow(QWidget):
     class RecipeTableModel(QAbstractTableModel):
         def __init__(self, parent: QObject):
             super().__init__(parent)
+            self.table_data: List[List[str]] = []
+            self.header_data: List[str] = ["Recipe Output"]
 
         def rowCount(self, /, parent: QModelIndex | QPersistentModelIndex = ...) -> int:
-            return 0
+            return len(self.table_data)
 
         def columnCount(
             self, /, parent: QModelIndex | QPersistentModelIndex = ...
         ) -> int:
-            return 0
+            return 1
+
+        def headerData(
+            self,
+            section: int,
+            orientation: Qt.Orientation,
+            role: int = Qt.ItemDataRole.DisplayRole,
+        ) -> object | None:
+            if role == Qt.ItemDataRole.DisplayRole:
+                if orientation == Qt.Orientation.Horizontal:
+                    return self.header_data[section]
 
         def data(
             self,
@@ -55,15 +61,18 @@ class RecipeWindow(QWidget):
             index: QModelIndex | QPersistentModelIndex,
             role: Qt.ItemDataRole = Qt.ItemDataRole.DisplayRole,
         ) -> object | None:
-            return None
+            if role == Qt.ItemDataRole.DisplayRole:
+                row = index.row()
+                column = index.column()
+                return self.table_data[row][column]
 
         @Slot(Recipe, Listing)
         def handle_recipe_table_update(self, recipe: Recipe, listing: Listing) -> None:
-            _logger.debug(
-                f"Received recipe update for recipe id {recipe.id} with listing {listing}."
-            )
-            # Here you would update the model's internal data structure and emit the necessary signals
-            # to notify the view of the changes.
+            row = []
+            row.append(get_item_name(recipe.output.id))
+            self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
+            self.table_data.append(row)
+            self.endInsertRows()
 
     class RecipeTableView(QTableView):
         def __init__(self, parent):
@@ -87,6 +96,7 @@ class RecipeWindow(QWidget):
 
         self.recipe_table_model = RecipeWindow.RecipeTableModel(self)
         self.recipe_table_view = RecipeWindow.RecipeTableView(self)
+        self.recipe_table_view.setModel(self.recipe_table_model)
         self.recipe_table_proxy_model = RecipeWindow.RecipeTableProxyModel(self)
         self.main_layout.addWidget(self.recipe_table_view)
 
@@ -103,20 +113,7 @@ class RecipeWindow(QWidget):
 
         self.recipe_worker_thread.start()
 
-    # @Slot()
-    # def stop_worker_thread(self) -> None:
-    #     self.recipe_worker_thread.quit()
-    #     self.recipe_worker_thread.wait()
-
-    # @Slot()
-    # def cleanup_worker_thread(self) -> None:
-    #     if self.recipe_worker_thread.isRunning():
-    #         self.stop_worker_thread()
-    #     self.recipe_worker_thread.deleteLater()
-    #     self.recipe_worker.deleteLater()
-
-    def closeEvent(self, event):
-        # self.cleanup_worker_thread()
+    def closeEvent(self, event: QCloseEvent) -> None:
         _logger.debug("Closing RecipeWindow, stopping worker thread.")
         self.recipe_worker_thread.quit()
         if self.recipe_worker_thread.wait():

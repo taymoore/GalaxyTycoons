@@ -123,6 +123,7 @@ class BaseBuildingCost(BaseModel):
 
 class GameData(BaseModel):
     materials: List[Material]
+    materials_dict: Dict[int, Material] = Field(default_factory=dict, exclude=True)
     recipes: List[Recipe]
     buildings: List[Building]
     workers: List[Worker]

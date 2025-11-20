@@ -8,7 +8,7 @@ from api.models.gameData import GameData
 
 CACHE_FILENAME = "game_data.pkl"
 
-LOAD_CACHE = False
+LOAD_CACHE = True
 
 _logger = logging.getLogger(__name__)
 
@@ -18,7 +18,11 @@ def _get_gamedata() -> GameData:
     content_response.raise_for_status()
     if content_response is None:
         raise ValueError("Failed to fetch game data from API.")
-    return GameData.model_validate(content_response.json())
+    game_data = GameData.model_validate(content_response.json())
+    game_data.materials_dict = {
+        material.id: material for material in game_data.materials
+    }
+    return game_data
 
 
 # Load cache from disk
@@ -46,3 +50,11 @@ def save_gamedata() -> None:
     Path(".data").mkdir(parents=True, exist_ok=True)
     with open(f".data/{CACHE_FILENAME}", "wb") as f:
         pickle.dump(cache, f)
+
+
+def get_item_name(item_id: int) -> str:
+    material = get_gamedata().materials_dict.get(item_id)
+    if material:
+        return material.name
+    else:
+        return "Unknown Item"
