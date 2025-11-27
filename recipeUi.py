@@ -35,7 +35,7 @@ class RecipeWindow(QWidget):
         def __init__(self, parent: QObject):
             super().__init__(parent)
             self.table_data: List[List[str]] = []
-            self.header_data: List[str] = ["Recipe Output"]
+            self.header_data: List[str] = ["Recipe Output", "Profit / hr"]
 
         def rowCount(self, /, parent: QModelIndex | QPersistentModelIndex = ...) -> int:
             return len(self.table_data)
@@ -43,7 +43,7 @@ class RecipeWindow(QWidget):
         def columnCount(
             self, /, parent: QModelIndex | QPersistentModelIndex = ...
         ) -> int:
-            return 1
+            return 2
 
         def headerData(
             self,
@@ -61,15 +61,20 @@ class RecipeWindow(QWidget):
             index: QModelIndex | QPersistentModelIndex,
             role: Qt.ItemDataRole = Qt.ItemDataRole.DisplayRole,
         ) -> object | None:
+            row = index.row()
+            column = index.column()
             if role == Qt.ItemDataRole.DisplayRole:
-                row = index.row()
-                column = index.column()
+                if column == 1:
+                    data = "{:,.2f}".format(data / 100) if data != -1 else ""
+                return data
+            elif role == Qt.ItemDataRole.UserRole:
                 return self.table_data[row][column]
 
         @Slot(Recipe, Listing)
         def handle_recipe_table_update(self, recipe: Recipe, listing: Listing) -> None:
             row = []
             row.append(get_item_name(recipe.output.id))
+            row.append(listing.current_price)
             self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
             self.table_data.append(row)
             self.endInsertRows()
@@ -82,12 +87,17 @@ class RecipeWindow(QWidget):
             )
             self.verticalHeader().hide()
             self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            self.setSortingEnabled(True)
+            self.sortByColumn(0, Qt.SortOrder.AscendingOrder)
 
     class RecipeTableProxyModel(QSortFilterProxyModel):
         def __init__(self, parent: QObject | None):
             super().__init__(parent)
             self.setDynamicSortFilter(True)
             self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            self.sort(0, Qt.SortOrder.AscendingOrder)
 
     def __init__(self, parent: QObject) -> None:
         super().__init__(parent)
@@ -96,8 +106,10 @@ class RecipeWindow(QWidget):
 
         self.recipe_table_model = RecipeWindow.RecipeTableModel(self)
         self.recipe_table_view = RecipeWindow.RecipeTableView(self)
-        self.recipe_table_view.setModel(self.recipe_table_model)
+        # self.recipe_table_view.setModel(self.recipe_table_model)
         self.recipe_table_proxy_model = RecipeWindow.RecipeTableProxyModel(self)
+        self.recipe_table_proxy_model.setSourceModel(self.recipe_table_model)
+        self.recipe_table_view.setModel(self.recipe_table_proxy_model)
         self.main_layout.addWidget(self.recipe_table_view)
 
         self.recipe_worker = RecipeWorker(get_gamedata().recipes)

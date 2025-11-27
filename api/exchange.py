@@ -62,11 +62,8 @@ class Exchange:
 
     @staticmethod
     def update_listings():
-        if (
-            Exchange.updated_time
-            and datetime.now() - Exchange.updated_time < UPDATE_RATE
-        ):
-            _logger.info("Exchange listings are up to date; no update needed.")
+        current_time = datetime.now()
+        if Exchange.updated_time and current_time - Exchange.updated_time < UPDATE_RATE:
             return
 
         url = "https://api.g2.galactictycoons.com/public/exchange/mat-prices/"
@@ -84,7 +81,7 @@ class Exchange:
         if "prices" not in data:
             raise ValueError("Unexpected response format: 'prices' key not found.")
 
-        Exchange.updated_time = datetime.now()
+        Exchange.updated_time = current_time
 
         try:
             listings = Listings.model_validate(data["prices"])
@@ -116,31 +113,16 @@ class Exchange:
     def get_listing(id: int) -> Optional[Listing]:
         current_time = datetime.now()
         if id in Exchange.cache:
-            listing = Exchange.cache[id]
             if current_time - Exchange.updated_time < UPDATE_RATE:
-                return listing
+                return Exchange.cache.get(id)
             else:
                 _logger.info(f"Cache for listing {id} is stale, fetching new data.")
         else:
             _logger.info(f"Listing {id} not in cache, fetching from API.")
 
-        url = f"https://api.g2.galactictycoons.com/public/exchange/mat-prices/{id}"
-        try:
-            response = Exchange.session.get(url)
-            response.raise_for_status()
-            data = response.json()
-            listing = Listing.model_validate(data)
-            # Update price history if listing exists in cache
-            if id in Exchange.cache:
-                listing.average_price_history = Exchange.cache[id].average_price_history
-            listing.average_price_history.loc[datetime.today().isoformat()] = (
-                listing.average_price
-            )
-            Exchange.cache[id] = listing
-            return listing
-        except RequestException as e:
-            _logger.error(f"Failed to fetch listing {id} from API: {e}")
-            return None
+        # TODO: Could use update single listing from API
+        Exchange.update_listings()
+        return Exchange.cache.get(id)
 
 
 atexit.register(Exchange.close)
