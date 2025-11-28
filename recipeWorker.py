@@ -14,16 +14,18 @@ class RecipeWorker(QObject):
     recipe_table_update_signal = Signal(Recipe, float)
     tech_level_change_signal = Signal(BuildingSpecialization, int)
 
-    def __init__(self, recipies=List[Recipe]):
+    def __init__(self, recipies=List[Recipe], tech_level_maximum=None) -> None:
         self.recipies = recipies
         self.abort = False
+        self.tech_level_maximum: Dict[BuildingSpecialization, int] = (
+            {} if tech_level_maximum is None else tech_level_maximum
+        )
         super().__init__(objectName="RecipeWorker")
 
     @Slot()
     def run(self) -> None:
         _logger.debug("RecipeWorker run method called.")
         recipe: Recipe
-        tech_level_maximum: Dict[BuildingSpecialization, int] = {}
         for recipe in self.recipies:
             if self.abort:
                 _logger.debug("RecipeWorker run method aborted.")
@@ -35,11 +37,11 @@ class RecipeWorker(QObject):
 
             # Update tech level slider to the maximum
             building_specialization = get_building(recipe.producedIn).specialization
-            if recipe.reqTech > tech_level_maximum.get(building_specialization, 1):
+            if recipe.reqTech > self.tech_level_maximum.get(building_specialization, 1):
                 self.tech_level_change_signal.emit(
                     building_specialization, recipe.reqTech
                 )
-                tech_level_maximum[building_specialization] = recipe.reqTech
+                self.tech_level_maximum[building_specialization] = recipe.reqTech
 
             # Calculate profit per hour
             profit_per_hour = listing.current_price * recipe.output.am

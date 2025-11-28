@@ -1,5 +1,8 @@
 from typing import List, Dict
 import logging
+from pathlib import Path
+import pickle
+from pydantic import BaseModel, Field
 from PySide6.QtCore import (
     Slot,
     Signal,
@@ -11,7 +14,6 @@ from PySide6.QtCore import (
     QModelIndex,
     QPersistentModelIndex,
 )
-
 from PySide6.QtWidgets import (
     QHeaderView,
     QTableView,
@@ -32,8 +34,16 @@ from api.models.gameData import Recipe, BuildingSpecialization
 from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
 
+CACHE_FILENAME = "settings.pkl"
+CACHE_DIR = ".data"
+
 _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.DEBUG)
+
+
+class Settings(BaseModel):
+    tech_level_filters: Dict[BuildingSpecialization, int] = Field(default_factory=dict)
+    tech_level_maximums: Dict[BuildingSpecialization, int] = Field(default_factory=dict)
 
 
 class RecipeWindow(QWidget):
@@ -123,7 +133,9 @@ class RecipeWindow(QWidget):
             assert isinstance(source_model, RecipeWindow.RecipeTableModel)
             recipe = source_model.recipes[source_row]
             building_specialization = get_building(recipe.producedIn).specialization
-            if recipe.reqTech <= self.tech_level_filters.get(building_specialization):
+            if recipe.reqTech <= self.tech_level_filters.get(
+                building_specialization, 0
+            ):
                 return super().filterAcceptsRow(source_row, source_parent)
             return False
 
@@ -162,7 +174,7 @@ class RecipeWindow(QWidget):
             def handle_slider_change(self, value: int) -> None:
                 self.label.setText(str(value))
 
-        def __init__(self, parent: QObject) -> None:
+        def __init__(self, parent: QObject, settings: Settings) -> None:
             super().__init__(parent)
 
             # Tech Filter
@@ -185,18 +197,44 @@ class RecipeWindow(QWidget):
             self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
             self.setMinimumWidth(130)
 
+            self.set_tech_level_sliders(settings)
+
         @Slot()
         def handle_tech_level_change(
             self, specialization: BuildingSpecialization, max_tech_level: int
         ) -> None:
             self.tech_widgets[specialization].set_maximum(max_tech_level)
 
+        def get_tech_level_maximums(self) -> Dict[BuildingSpecialization, int]:
+            tech_level_maximums: Dict[BuildingSpecialization, int] = {}
+            for specialization, tech_widget in self.tech_widgets.items():
+                tech_level_maximums[specialization] = tech_widget.slider.maximum()
+            return tech_level_maximums
+
+        def set_tech_level_sliders(self, settings: Settings) -> None:
+            for specialization, max_level in settings.tech_level_maximums.items():
+                self.tech_widgets[specialization].set_maximum(max_level)
+            for specialization, filter_level in settings.tech_level_filters.items():
+                self.tech_widgets[specialization].slider.setValue(filter_level)
+
     def __init__(self, parent: QObject) -> None:
+        cache_path = Path(CACHE_DIR) / CACHE_FILENAME
+        if cache_path.exists():
+            try:
+                with cache_path.open("rb") as f:
+                    settings = pickle.load(f)
+                _logger.debug(f"Loaded settings from {cache_path}.")
+            except (IOError, pickle.UnpicklingError) as e:
+                _logger.error(f"Error loading settings from {cache_path}: {e}")
+                settings = Settings()
+        else:
+            settings = Settings()
+
         super().__init__(parent)
         self.main_layout = QHBoxLayout()
         self.setLayout(self.main_layout)
 
-        self.toolbox = RecipeWindow.FilterToolbox(self)
+        self.toolbox = RecipeWindow.FilterToolbox(self, settings)
         self.toolbox.setSizePolicy(
             QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
         )
@@ -216,11 +254,17 @@ class RecipeWindow(QWidget):
                     spec, value
                 )
             )
+        for specialization, max_level in settings.tech_level_filters.items():
+            self.recipe_table_proxy_model.set_tech_level_filter(
+                specialization, max_level
+            )
         self.recipe_table_view.setModel(self.recipe_table_proxy_model)
         self.main_layout.addWidget(self.recipe_table_view)
         self.main_layout.setStretchFactor(self.recipe_table_view, 1)
 
-        self.recipe_worker = RecipeWorker(get_gamedata().recipes)
+        self.recipe_worker = RecipeWorker(
+            get_gamedata().recipes, settings.tech_level_maximums
+        )
         self.recipe_worker.tech_level_change_signal.connect(
             self.toolbox.handle_tech_level_change
         )
@@ -244,3 +288,20 @@ class RecipeWindow(QWidget):
             _logger.debug("Worker thread has stopped successfully.")
         else:
             _logger.debug("Worker thread did not stop in time.")
+
+        _logger.debug("Saving settings.")
+        settings = Settings()
+        settings.tech_level_filters = self.recipe_table_proxy_model.tech_level_filters
+        settings.tech_level_maximums = self.toolbox.get_tech_level_maximums()
+        cache_path = Path(CACHE_DIR) / CACHE_FILENAME
+        Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
+        try:
+            with cache_path.open("wb") as f:
+                pickle.dump(settings, f)
+            _logger.debug(f"Settings saved to {cache_path}.")
+        except IOError as e:
+            _logger.error(f"Error saving settings to {cache_path}: {e}")
+            raise
+        except Exception as e:
+            _logger.error(f"Unexpected error saving settings: {e}")
+            raise

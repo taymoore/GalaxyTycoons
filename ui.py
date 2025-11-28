@@ -11,6 +11,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QPersistentModelIndex,
     QSize,
+    QEvent,
 )
 
 from PySide6.QtWidgets import (
@@ -42,7 +43,7 @@ class MainWindow(QMainWindow):
         # self.setMinimumSize(QSize(1000, 600))
         self.resize(QSize(1000, 600))
 
-    def closeEvent(self, event):
+    def closeEvent(self, event: QEvent) -> None:
         _logger.debug("MainWindow closeEvent called.")
         # self.recipe_window.close()
         for child in self.findChildren(QWidget):
