@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QLabel,
 )
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QWheelEvent
 
 from api.gameData import get_gamedata, get_item_name, get_building
 from api.models.gameData import Recipe, BuildingSpecialization
@@ -52,7 +52,7 @@ class RecipeWindow(QWidget):
             super().__init__(parent)
             self.table_data: List[List[str]] = []
             self.recipes: List[Recipe] = []
-            self.header_data: List[str] = ["Recipe Output", "Profit / hr"]
+            self.header_data: List[str] = ["Recipe Output", "Profit / hr", "Tech Req."]
 
         def rowCount(self, /, parent: QModelIndex | QPersistentModelIndex = ...) -> int:
             return len(self.table_data)
@@ -60,7 +60,7 @@ class RecipeWindow(QWidget):
         def columnCount(
             self, /, parent: QModelIndex | QPersistentModelIndex = ...
         ) -> int:
-            return 2
+            return 3
 
         def headerData(
             self,
@@ -95,6 +95,9 @@ class RecipeWindow(QWidget):
             row = []
             row.append(get_item_name(recipe.output.id))
             row.append(profit_per_hour)
+            row.append(
+                f"{get_building(recipe.producedIn).specialization.name} {recipe.reqTech}"
+            )
             self.recipes.append(recipe)
             self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
             self.table_data.append(row)
@@ -148,16 +151,25 @@ class RecipeWindow(QWidget):
 
     class FilterToolbox(QToolBox):
         class TechFilterWidget(QGroupBox):
+            class TechSlider(QSlider):
+                def __init__(
+                    self, orientation: Qt.Orientation, parent: QObject
+                ) -> None:
+                    super().__init__(orientation, parent)
+                    self.setTickPosition(QSlider.TickPosition.TicksBelow)
+                    self.setMinimum(0)
+                    self.setMaximum(1)
+                    self.setTickInterval(1)
+
+                def wheelEvent(self, event: QWheelEvent) -> None:
+                    event.ignore()
+
             def __init__(self, title: str, parent: QObject) -> None:
                 super().__init__(title, parent)
 
                 self.layout = QHBoxLayout()
 
-                self.slider = QSlider(Qt.Orientation.Horizontal, self)
-                self.slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-                self.slider.setMinimum(1)
-                self.slider.setMaximum(1)
-                self.slider.setTickInterval(1)
+                self.slider = self.TechSlider(Qt.Orientation.Horizontal, self)
                 self.layout.addWidget(self.slider)
 
                 self.label = QLabel("1", self)

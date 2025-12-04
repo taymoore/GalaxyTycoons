@@ -46,10 +46,11 @@ class RecipeWorker(QObject):
             # Calculate profit per hour
             profit_per_hour = listing.current_price * recipe.output.am
             for material_amount in recipe.inputs:
-                profit_per_hour -= (
-                    Exchange.get_listing(material_amount.id).current_price
-                    * material_amount.am
-                )
+                material_price = Exchange.get_listing(material_amount.id).current_price
+                if material_price < 1:
+                    profit_per_hour = 0
+                    break
+                profit_per_hour -= material_price * material_amount.am
             profit_per_hour = profit_per_hour / (recipe.timeMinutes / 60)
 
             self.recipe_table_update_signal.emit(recipe, profit_per_hour)

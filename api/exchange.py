@@ -123,6 +123,3 @@ class Exchange:
         # TODO: Could use update single listing from API
         Exchange.update_listings()
         return Exchange.cache.get(id)
-
-
-atexit.register(Exchange.close)
