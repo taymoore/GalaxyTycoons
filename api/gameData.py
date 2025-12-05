@@ -4,7 +4,7 @@ import pickle
 from pathlib import Path
 import requests
 
-from api.models.gameData import GameData, Building
+from api.models.gameData import GameData, Building, Worker, WorkerType
 
 CACHE_FILENAME = "game_data.pkl"
 
@@ -65,3 +65,10 @@ def get_building(building_id: int) -> Building:
         if building.id == building_id:
             return building
     raise ValueError(f"Building with ID {building_id} not found.")
+
+
+def get_worker(worker_type: WorkerType) -> Worker:
+    for worker in get_gamedata().workers:
+        if worker.type == worker_type:
+            return worker
+    raise ValueError(f"Worker with type {worker_type} not found.")
