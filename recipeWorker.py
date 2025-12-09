@@ -27,9 +27,16 @@ class RecipeWorker(QObject):
         _logger.debug("RecipeWorker run method called.")
         recipe: Recipe
         for recipe in self.recipies:
+
+            # Check for abort signal
             if self.abort:
                 _logger.debug("RecipeWorker run method aborted.")
                 break
+
+            # Skip recipes with no inputs (e.g. raw material extraction)
+            if len(recipe.inputs) == 0:
+                continue
+
             assert isinstance(recipe, Recipe)
             listing = Exchange.get_listing(recipe.output.id)
             if get_item_name(listing.id) == "TEMP":
