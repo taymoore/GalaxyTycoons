@@ -2,6 +2,8 @@ from typing import List, Dict
 import logging
 from pathlib import Path
 import pickle
+import numpy as np
+import pandas as pd
 from pydantic import BaseModel, Field
 from PySide6.QtCore import (
     Slot,
@@ -28,9 +30,19 @@ from PySide6.QtWidgets import (
     QLabel,
 )
 from PySide6.QtGui import QCloseEvent, QWheelEvent
+from pyqtgraph import (
+    PlotWidget,
+    AxisItem,
+    DateAxisItem,
+    ViewBox,
+    mkPen,
+    functions,
+    Point,
+)
 
 from api.gameData import get_gamedata, get_item_name, get_building
 from api.models.gameData import Recipe, BuildingSpecialization
+from api.exchange import Exchange
 from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
 
@@ -47,7 +59,156 @@ class Settings(BaseModel):
 
 
 class RecipeWindow(QWidget):
+    class PriceGraph(PlotWidget):
+        class FmtAxesItem(AxisItem):
+            def tickStrings(self, values, scale, spacing):
+                return [f"{v:,.0f}" for v in values]
+
+        def __init__(self, parent=None, background="default", plotItem=None, **kargs):
+            kargs["axisItems"] = {
+                "bottom": DateAxisItem(),
+                "left": RecipeWindow.PriceGraph.FmtAxesItem(orientation="left"),
+                "right": RecipeWindow.PriceGraph.FmtAxesItem(orientation="right"),
+            }
+            super().__init__(parent, background, plotItem, **kargs)
+
+            self.p1 = self.plotItem
+            self.p1.getAxis("left").setLabel("Sale Price", color="#00ffff")
+            self.p1_pen = mkPen(color="#00ff00", width=2)
+
+            ## create a new ViewBox, link the right axis to its coordinate system
+            self.p2 = ViewBox()
+            self.p1.showAxis("right")
+            self.p1.scene().addItem(self.p2)
+            self.p1.getAxis("right").linkToView(self.p2)
+            self.p2.setXLink(self.p1)
+            self.p1.getAxis("right").setLabel("Purchases", color="#00ff00")
+
+            self.updateViews()
+            self.p1.vb.sigResized.connect(self.updateViews)
+
+        @Slot()
+        def updateViews(self) -> None:
+            self.p2.setGeometry(self.p1.vb.sceneBoundingRect())
+            self.p2.linkedViewChanged(self.p1.vb, self.p2.XAxis)
+
+        def auto_range(self):
+            self.p2.enableAutoRange(axis="y")
+            self.p1.vb.updateAutoRange()
+            self.p2.updateAutoRange()
+
+            bounds = [np.inf, -np.inf]
+            for items in (
+                self.p1.vb.addedItems,
+                self.p2.addedItems,
+            ):
+                for item in items:
+                    _bounds = item.dataBounds(0)
+                    if _bounds[0] is None or _bounds[1] is None:
+                        continue
+                    bounds[0] = min(_bounds[0], bounds[0])
+                    bounds[1] = max(_bounds[1], bounds[1])
+            if bounds[0] != np.inf and bounds[1] != -np.inf:
+                self.p1.vb.setRange(xRange=bounds)
+
+            bounds = [np.inf, -np.inf]
+            for items in (self.p2.addedItems,):
+                for item in items:
+                    _bounds = item.dataBounds(1)
+                    if _bounds[0] is None or _bounds[1] is None:
+                        continue
+                    bounds[0] = min(_bounds[0], bounds[0])
+                    bounds[1] = max(_bounds[1], bounds[1])
+            if bounds[0] != np.inf and bounds[1] != -np.inf:
+                self.p2.setRange(yRange=bounds)
+
+        def wheelEvent(self, ev, axis=None):
+            super().wheelEvent(ev)
+            for vb in (
+                self.p1.vb,
+                self.p2,
+            ):
+                if axis in (0, 1):
+                    mask = [False, False]
+                    mask[axis] = vb.state["mouseEnabled"][axis]
+                else:
+                    mask = vb.state["mouseEnabled"][:]
+                s = 1.02 ** (
+                    (ev.angleDelta().y() - ev.angleDelta().x())
+                    * vb.state["wheelScaleFactor"]
+                )  # actual scaling factor
+                s = [(None if m is False else s) for m in mask]
+                center = Point(
+                    functions.invertQTransform(vb.childGroup.transform()).map(
+                        ev.position()
+                    )
+                )
+
+                vb._resetTarget()
+                vb.scaleBy(s, center)
+                ev.accept()
+                vb.sigRangeChangedManually.emit(mask)
+
+        @Slot(Recipe)
+        def plot_recipe(self, recipe: Recipe) -> None:
+            self.p1.clear()
+            listing = Exchange.get_listing(recipe.output.id)
+
+            listing.average_price_history.sort_index(inplace=True)
+
+            # Convert the index to Unix timestamps (numerical format)
+            x_data = (
+                pd.to_datetime(listing.average_price_history.index).astype("int64")
+                // 10**9
+            )
+
+            # Ensure y_data is numeric
+            y_data = pd.to_numeric(
+                listing.average_price_history["price"], errors="coerce"
+            )
+
+            # Plot the data
+            self.p1.plot(
+                x=np.asarray(x_data),
+                y=np.asarray(y_data),
+                pen=self.p1_pen,
+                name="Purchases",
+            )
+
+            # Plot each ingredient price
+            for material_amount in recipe.inputs:
+                material_listing = Exchange.get_listing(material_amount.id)
+                material_listing.average_price_history.sort_index(inplace=True)
+
+                x_data = (
+                    pd.to_datetime(material_listing.average_price_history.index).astype(
+                        "int64"
+                    )
+                    // 10**9
+                )
+                y_data = pd.to_numeric(
+                    material_listing.average_price_history["price"], errors="coerce"
+                )
+
+                self.p1.plot(
+                    x=np.asarray(x_data),
+                    y=np.asarray(y_data),
+                    pen=mkPen(width=1),
+                    name=f"Ingredient: {material_listing.name}",
+                )
+                # # Create a new PlotDataItem and add it to self.p2
+                # plot_item = PlotDataItem(
+                #     x=np.asarray(x_data),
+                #     y=np.asarray(y_data),
+                #     pen=mkPen(width=1),
+                #     name=f"Ingredient: {material_listing.name}",
+                # )
+                # self.p2.addItem(plot_item)
+
+            self.auto_range()
+
     class RecipeTableModel(QAbstractTableModel):
+
         def __init__(self, parent: QObject):
             super().__init__(parent)
             self.table_data: List[List[str]] = []
@@ -104,6 +265,8 @@ class RecipeWindow(QWidget):
             self.endInsertRows()
 
     class RecipeTableView(QTableView):
+        recipe_clicked = Signal(Recipe)
+
         def __init__(self, parent):
             super().__init__(parent)
             self.horizontalHeader().setSectionResizeMode(
@@ -115,6 +278,22 @@ class RecipeWindow(QWidget):
             self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.setSortingEnabled(True)
             self.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+
+            self.clicked.connect(self.handle_table_clicked)
+
+        @Slot(QModelIndex)
+        def handle_table_clicked(self, index: QModelIndex) -> None:
+            if not index.isValid():
+                return
+            proxy_model = self.model()
+            source_index = proxy_model.mapToSource(index)
+            source_model = proxy_model.sourceModel()
+            assert isinstance(source_model, RecipeWindow.RecipeTableModel)
+            recipe = source_model.recipes[source_index.row()]
+            # _logger.debug(
+            #     f"RecipeTableView clicked at row {index.row()}, column {index.column()}, recipe {get_item_name(recipe.output.id)}."
+            # )
+            self.recipe_clicked.emit(recipe)
 
     class RecipeTableProxyModel(QSortFilterProxyModel):
         def __init__(self, parent: QObject | None):
@@ -272,7 +451,14 @@ class RecipeWindow(QWidget):
             )
         self.recipe_table_view.setModel(self.recipe_table_proxy_model)
         self.main_layout.addWidget(self.recipe_table_view)
+
+        self.plot = RecipeWindow.PriceGraph(self)
+        self.main_layout.addWidget(self.plot)
+
+        self.recipe_table_view.recipe_clicked.connect(self.plot.plot_recipe)
+
         self.main_layout.setStretchFactor(self.recipe_table_view, 1)
+        self.main_layout.setStretchFactor(self.plot, 1)
 
         self.recipe_worker = RecipeWorker(
             get_gamedata().recipes, settings.tech_level_maximums
