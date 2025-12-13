@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSizePolicy,
     QLabel,
+    QCheckBox,
 )
 from PySide6.QtGui import QCloseEvent, QWheelEvent
 from pyqtgraph import (
@@ -42,7 +43,7 @@ from pyqtgraph import (
 
 from utils import align_add
 from api.gameData import get_gamedata, get_item_name, get_building
-from api.models.gameData import Recipe, BuildingSpecialization
+from api.models.gameData import Recipe, BuildingSpecialization, Building
 from api.exchange import Exchange
 from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
@@ -222,10 +223,7 @@ class RecipeWindow(QWidget):
             elif role == Qt.ItemDataRole.UserRole:
                 return data
 
-        @Slot(Recipe, Listing)
-        def handle_recipe_table_update(
-            self, recipe: Recipe, profit_per_hour: float
-        ) -> None:
+        def recipe_table_update(self, recipe: Recipe, profit_per_hour: float) -> None:
             row = []
             row.append(get_item_name(recipe.output.id))
             row.append(profit_per_hour)
@@ -263,9 +261,6 @@ class RecipeWindow(QWidget):
             source_model = proxy_model.sourceModel()
             assert isinstance(source_model, RecipeWindow.RecipeTableModel)
             recipe = source_model.recipes[source_index.row()]
-            # _logger.debug(
-            #     f"RecipeTableView clicked at row {index.row()}, column {index.column()}, recipe {get_item_name(recipe.output.id)}."
-            # )
             self.recipe_clicked.emit(recipe)
 
     class RecipeTableProxyModel(QSortFilterProxyModel):
@@ -275,6 +270,7 @@ class RecipeWindow(QWidget):
             self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
             self.sort(1, Qt.SortOrder.DescendingOrder)
             self.tech_level_filters: Dict[BuildingSpecialization, int] = {}
+            self.building_filters: Dict[int, bool] = {}
 
         def lessThan(self, source_left: QModelIndex, source_right: QModelIndex) -> bool:
             if source_left.column() == 1:
@@ -287,18 +283,33 @@ class RecipeWindow(QWidget):
             source_model = self.sourceModel()
             assert isinstance(source_model, RecipeWindow.RecipeTableModel)
             recipe = source_model.recipes[source_row]
-            building_specialization = get_building(recipe.producedIn).specialization
-            if recipe.reqTech <= self.tech_level_filters.get(
-                building_specialization, 0
-            ):
-                return super().filterAcceptsRow(source_row, source_parent)
-            return False
 
-        @Slot()
+            # Filter based on tech
+            building_specialization = get_building(recipe.producedIn).specialization
+            try:
+                if recipe.reqTech > self.tech_level_filters[building_specialization]:
+                    return False
+            except KeyError:
+                _logger.error(
+                    f"No tech level filter set for {building_specialization}."
+                )
+            try:
+                if not self.building_filters[recipe.producedIn]:
+                    return False
+            except KeyError:
+                _logger.error(f"No building filter set for {recipe.producedIn}.")
+            return super().filterAcceptsRow(source_row, source_parent)
+
+        @Slot(BuildingSpecialization, int)
         def set_tech_level_filter(
             self, specialization: BuildingSpecialization, max_tech_level: int
         ) -> None:
             self.tech_level_filters[specialization] = max_tech_level
+            self.invalidateFilter()
+
+        @Slot(int, bool)
+        def set_building_filter(self, building: Building, enabled: bool) -> None:
+            self.building_filters[building.id] = enabled
             self.invalidateFilter()
 
     class FilterToolbox(QToolBox):
@@ -338,6 +349,19 @@ class RecipeWindow(QWidget):
             def handle_slider_change(self, value: int) -> None:
                 self.label.setText(str(value))
 
+        class BuildingCheckbox(QCheckBox):
+            checkbox_toggled = Signal(Building, bool)
+
+            def __init__(self, building: Building, parent: QObject) -> None:
+                super().__init__(building.name, parent)
+                self.building = building
+                self.toggled.connect(self.handle_toggle)
+                self.setChecked(True)
+
+            @Slot(bool)
+            def handle_toggle(self, checked: bool) -> None:
+                self.checkbox_toggled.emit(self.building, checked)
+
         def __init__(self, parent: QObject, settings: Settings) -> None:
             super().__init__(parent)
 
@@ -345,7 +369,6 @@ class RecipeWindow(QWidget):
             tech_filter_widget = QWidget(self)
             tech_filter_layout = QVBoxLayout()
             tech_filter_widget.setLayout(tech_filter_layout)
-
             self.tech_widgets: Dict[
                 BuildingSpecialization, RecipeWindow.FilterToolbox.TechFilterWidget
             ] = {}
@@ -358,10 +381,51 @@ class RecipeWindow(QWidget):
                 self.tech_widgets[specialization] = tech_widget
                 tech_filter_layout.addWidget(tech_widget)
             self.addItem(tech_filter_widget, "Tech Level")
+
+            # Building Filter
+            building_filter_widget = QWidget(self)
+            self.building_filter_layout = QVBoxLayout()
+            building_filter_widget.setLayout(self.building_filter_layout)
+            self.building_widgets: Dict[int, QCheckBox] = {}
+            self.building_filter_all_checkbox = QCheckBox("Select All", self)
+            self.building_filter_all_checkbox.setChecked(True)
+            self.building_filter_layout.addWidget(self.building_filter_all_checkbox)
+            self.building_filter_all_checkbox.toggled.connect(
+                self.handle_building_filter_all_toggle
+            )
+            self.addItem(building_filter_widget, "Buildings")
+
             self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
             self.setMinimumWidth(130)
 
             self.set_tech_level_sliders(settings)
+
+        @Slot(bool)
+        def handle_building_filter_all_toggle(self, checked: bool) -> None:
+            for checkbox in self.building_widgets.values():
+                checkbox.setChecked(checked)
+
+        # Creates and adds a building filter checkbox
+        # Returns None if building filter already exists
+        def add_building_filter(self, building: Building) -> BuildingCheckbox:
+            if building.id in self.building_widgets:
+                return
+            checkbox = RecipeWindow.FilterToolbox.BuildingCheckbox(building, self)
+            self.building_widgets[building.id] = checkbox
+
+            # Sort widgets alphabetically before adding new one
+            widgets = [checkbox]
+            for i in reversed(range(1, self.building_filter_layout.count())):
+                item = self.building_filter_layout.itemAt(i)
+                widget = item.widget()
+                if widget:
+                    widgets.append(widget)
+                    self.building_filter_layout.removeWidget(widget)
+            widgets.sort(key=lambda w: w.text() if hasattr(w, "text") else "")
+            for widget in widgets:
+                self.building_filter_layout.addWidget(widget)
+
+            return checkbox
 
         @Slot()
         def handle_tech_level_change(
@@ -446,11 +510,25 @@ class RecipeWindow(QWidget):
         self.recipe_worker_thread.started.connect(self.recipe_worker.run)
         self.recipe_worker_thread.finished.connect(self.recipe_worker.deleteLater)
 
-        self.recipe_worker.recipe_table_update_signal.connect(
-            self.recipe_table_model.handle_recipe_table_update
-        )
+        self.recipe_worker.recipe_added_signal.connect(self.handle_recipe_added)
 
         self.recipe_worker_thread.start()
+
+    @Slot(Recipe, float)
+    def handle_recipe_added(self, recipe: Recipe, profit_per_hour: float) -> None:
+        # Add building filter
+        building = get_building(recipe.producedIn)
+        checkbox = self.toolbox.add_building_filter(building)
+        if checkbox is not None:
+            self.recipe_table_proxy_model.set_building_filter(
+                building, True
+            )  # need to set initial state before connect since emit is in add_building_filter()
+            checkbox.checkbox_toggled.connect(
+                self.recipe_table_proxy_model.set_building_filter
+            )
+
+        # Update recipe table
+        self.recipe_table_model.recipe_table_update(recipe, profit_per_hour)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         _logger.debug("Closing RecipeWindow, stopping worker thread.")

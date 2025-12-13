@@ -11,7 +11,7 @@ _logger = logging.getLogger(__name__)
 
 
 class RecipeWorker(QObject):
-    recipe_table_update_signal = Signal(Recipe, float)
+    recipe_added_signal = Signal(Recipe, float)
     tech_level_change_signal = Signal(BuildingSpecialization, int)
 
     def __init__(self, recipies=List[Recipe], tech_level_maximum=None) -> None:
@@ -89,7 +89,7 @@ class RecipeWorker(QObject):
 
             profit_per_hour -= worker_cost_per_hour
 
-            self.recipe_table_update_signal.emit(recipe, profit_per_hour)
+            self.recipe_added_signal.emit(recipe, profit_per_hour)
 
     def stop(self) -> None:
         _logger.debug("RecipeWorker stop method called.")
