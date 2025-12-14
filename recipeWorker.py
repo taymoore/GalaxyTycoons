@@ -11,7 +11,7 @@ _logger = logging.getLogger(__name__)
 
 
 class RecipeWorker(QObject):
-    recipe_added_signal = Signal(Recipe, float)
+    recipe_added_signal = Signal(Recipe)
     tech_level_change_signal = Signal(BuildingSpecialization, int)
 
     def __init__(self, recipies=List[Recipe], tech_level_maximum=None) -> None:
@@ -52,44 +52,15 @@ class RecipeWorker(QObject):
                 )
                 self.tech_level_maximum[building.specialization] = recipe.reqTech
 
-            # Calculate worker cost
-            worker_type: WorkerType
-            worker_cost_per_hour = 0.0
-            for worker_type, worker_count in enumerate(
-                building.workersNeeded or [], start=1
-            ):
-                if worker_count == 0:
-                    continue
-                worker = get_worker(worker_type)
-                for consumable in worker.consumables:
-                    if consumable.essential is False:
-                        continue
-                    consumable_listing = Exchange.get_listing(consumable.matId)
-                    if consumable_listing.current_price < 1:
-                        _logger.warning(
-                            f"No price data for consumable {consumable_listing.name} ({consumable.matId}), skipping worker cost calculation for recipe {get_item_name(recipe.output.id)} ({recipe.id})."
-                        )
-                        continue
-                    worker_cost_per_hour += (
-                        consumable_listing.current_price
-                        * consumable.amount
-                        * worker_count
-                        / 24000
-                    )
-
-            # Calculate profit per hour
-            profit_per_hour = listing.current_price * recipe.output.am
+            # Skip if inputs are unavailable
             for material_amount in recipe.inputs:
                 material_price = Exchange.get_listing(material_amount.id).current_price
                 if material_price < 1:
-                    profit_per_hour = 0
                     break
-                profit_per_hour -= material_price * material_amount.am
-            profit_per_hour = profit_per_hour / (recipe.timeMinutes / 60)
+            if material_price < 1:
+                continue
 
-            profit_per_hour -= worker_cost_per_hour
-
-            self.recipe_added_signal.emit(recipe, profit_per_hour)
+            self.recipe_added_signal.emit(recipe)
 
     def stop(self) -> None:
         _logger.debug("RecipeWorker stop method called.")

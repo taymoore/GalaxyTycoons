@@ -1,5 +1,6 @@
 from typing import List, Dict
 import logging
+import itertools
 from pathlib import Path
 import pickle
 import numpy as np
@@ -9,6 +10,7 @@ from PySide6.QtCore import (
     Slot,
     Signal,
     QThread,
+    QSize,
     Qt,
     QAbstractTableModel,
     QSortFilterProxyModel,
@@ -29,6 +31,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QLabel,
     QCheckBox,
+    QSplitter,
 )
 from PySide6.QtGui import QCloseEvent, QWheelEvent
 import pyqtgraph as pg
@@ -36,8 +39,8 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
 from utils import align_add
-from api.gameData import get_gamedata, get_item_name, get_building
-from api.models.gameData import Recipe, BuildingSpecialization, Building
+from api.gameData import get_gamedata, get_item_name, get_building, get_worker
+from api.models.gameData import Recipe, BuildingSpecialization, Building, WorkerType
 from api.exchange import Exchange
 from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
@@ -228,7 +231,7 @@ class RecipeWindow(QWidget):
                 color="#00ff00",
                 anchor=(1, 1),
             )
-            label.setPos(x[-1], y[-1])
+            label.setPos(x[-1], ingredient_subtotal[x[-1]])
             self.p1.addItem(label)
 
             self.auto_range()
@@ -261,7 +264,12 @@ class RecipeWindow(QWidget):
             super().__init__(parent)
             self.table_data: List[List[str]] = []
             self.recipes: List[Recipe] = []
-            self.header_data: List[str] = ["Recipe Output", "Profit / hr", "Tech Req."]
+            self.header_data: List[str] = [
+                "Recipe Output",
+                "Profit / hr",
+                "Tech Req.",
+                "Consumables",
+            ]
 
         def rowCount(self, /, parent: QModelIndex | QPersistentModelIndex = ...) -> int:
             return len(self.table_data)
@@ -269,7 +277,7 @@ class RecipeWindow(QWidget):
         def columnCount(
             self, /, parent: QModelIndex | QPersistentModelIndex = ...
         ) -> int:
-            return 3
+            return 4
 
         def headerData(
             self,
@@ -297,13 +305,22 @@ class RecipeWindow(QWidget):
             elif role == Qt.ItemDataRole.UserRole:
                 return data
 
-        def recipe_table_update(self, recipe: Recipe, profit_per_hour: float) -> None:
+        def recipe_table_update(
+            self,
+            recipe: Recipe,
+            profit_per_hour: float,
+            consumable_list: tuple[int, ...],
+        ) -> None:
             row = []
             row.append(get_item_name(recipe.output.id))
             row.append(profit_per_hour)
             row.append(
                 f"{get_building(recipe.producedIn).specialization.name} {recipe.reqTech}"
             )
+            row.append(
+                ", ".join(sorted(get_item_name(mat_id) for mat_id in consumable_list))
+            )
+
             self.recipes.append(recipe)
             self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
             self.table_data.append(row)
@@ -336,6 +353,39 @@ class RecipeWindow(QWidget):
             assert isinstance(source_model, RecipeWindow.RecipeTableModel)
             recipe = source_model.recipes[source_index.row()]
             self.recipe_clicked.emit(recipe)
+
+        def setModel(self, model: QAbstractTableModel) -> None:
+            """Override setModel to connect signals for dynamic resizing."""
+            super().setModel(model)
+            if model:
+                model.modelReset.connect(self.adjust_table_width)
+                model.dataChanged.connect(self.adjust_table_width)
+                model.rowsInserted.connect(self.adjust_table_width)
+                model.rowsRemoved.connect(self.adjust_table_width)
+
+        def adjust_table_width(self):
+            """Adjust the table width to fit the contents."""
+            self.resizeColumnsToContents()
+
+            # Calculate the total width of all columns
+            total_table_width = sum(
+                self.horizontalHeader().sectionSize(i)
+                for i in range(self.horizontalHeader().count())
+            )
+
+            # Add width for vertical scrollbar (if present)
+            if self.verticalScrollBar().isVisible():
+                total_table_width += self.verticalScrollBar().width()
+
+            # Update the table's minimum and maximum width
+            self.setMinimumWidth(total_table_width)
+            self.setMaximumWidth(total_table_width)
+
+            # Notify the parent splitter to adjust sizes
+            if self.parent() and isinstance(self.parent(), QSplitter):
+                self.parent().setSizes(
+                    [total_table_width, self.parent().width() - total_table_width]
+                )
 
     class RecipeTableProxyModel(QSortFilterProxyModel):
         def __init__(self, parent: QObject | None):
@@ -470,7 +520,7 @@ class RecipeWindow(QWidget):
             self.addItem(building_filter_widget, "Buildings")
 
             self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
-            self.setMinimumWidth(130)
+            self.setMinimumWidth(145)
 
             self.set_tech_level_sliders(settings)
 
@@ -540,13 +590,17 @@ class RecipeWindow(QWidget):
         self.toolbox.setSizePolicy(
             QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
         )
+        self.toolbox.setMaximumWidth(self.toolbox.sizeHint().width())
         self.main_layout.addWidget(self.toolbox)
-        self.main_layout.setStretchFactor(self.toolbox, 0)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self.main_layout.addWidget(splitter)
+        self.main_layout.setStretchFactor(splitter, 1)
 
         self.recipe_table_model = RecipeWindow.RecipeTableModel(self)
         self.recipe_table_view = RecipeWindow.RecipeTableView(self)
         self.recipe_table_view.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
         )
         self.recipe_table_proxy_model = RecipeWindow.RecipeTableProxyModel(self)
         self.recipe_table_proxy_model.setSourceModel(self.recipe_table_model)
@@ -561,15 +615,17 @@ class RecipeWindow(QWidget):
                 specialization, max_level
             )
         self.recipe_table_view.setModel(self.recipe_table_proxy_model)
-        self.main_layout.addWidget(self.recipe_table_view)
+
+        splitter.addWidget(self.recipe_table_view)
 
         self.plot = RecipeWindow.PriceGraph(self)
-        self.main_layout.addWidget(self.plot)
+        splitter.addWidget(self.plot)
+
+        # Adjust stretch factors in splitter
+        splitter.setStretchFactor(0, 0)  # Table view gets no extra space
+        splitter.setStretchFactor(1, 1)  # Plot gets all extra space
 
         self.recipe_table_view.recipe_clicked.connect(self.plot.plot_recipe)
-
-        self.main_layout.setStretchFactor(self.recipe_table_view, 1)
-        self.main_layout.setStretchFactor(self.plot, 1)
 
         self.recipe_worker = RecipeWorker(
             get_gamedata().recipes, settings.tech_level_maximums
@@ -588,10 +644,111 @@ class RecipeWindow(QWidget):
 
         self.recipe_worker_thread.start()
 
-    @Slot(Recipe, float)
-    def handle_recipe_added(self, recipe: Recipe, profit_per_hour: float) -> None:
-        # Add building filter
+    @Slot(Recipe)
+    def handle_recipe_added(self, recipe: Recipe) -> None:
         building = get_building(recipe.producedIn)
+
+        # Calculate profit per hour
+        listing = Exchange.get_listing(recipe.output.id)
+        base_profit_per_hour = listing.current_price * recipe.output.am
+        for material_amount in recipe.inputs:
+            material_price = Exchange.get_listing(material_amount.id).current_price
+            if material_price < 1:
+                _logger.error(
+                    f"No price data for material {material_amount.id}. This should've been caught in RecipeWorker.run()."
+                )
+                raise ValueError(f"No price data for material {material_amount.id}.")
+            base_profit_per_hour -= material_price * material_amount.am
+        base_profit_per_hour = base_profit_per_hour / (recipe.timeMinutes / 60)
+
+        # Calculate worker cost
+        worker_type: WorkerType
+        worker_cost_per_hour_dict: Dict[List[int], float] = (
+            {}
+        )  # consumable matId -> cost per hour
+        profit_per_hour = 0.0
+        # Get list of consumables
+        consumable_id_set: set[int] = set()
+        for worker_type, worker_count in enumerate(
+            building.workersNeeded or [], start=1
+        ):
+            if worker_count == 0:
+                continue
+            worker = get_worker(worker_type)
+            consumable_id_set.update(
+                [consumable.matId for consumable in worker.consumables]
+            )
+        if len(consumable_id_set) == 0:
+            _logger.debug(
+                f"No workers needed for building {building.name} ({building.id})."
+            )
+        # Try all combinations of consumables to find lowest cost
+        consumable_preferred_combination = None
+        for combination_size in range(len(consumable_id_set or []) + 1):
+            for consumable_list in itertools.combinations(
+                consumable_id_set or [], combination_size
+            ):
+                worker_cost_per_hour = 0.0
+                production_modifier = 1.0
+                for worker_type, worker_count in enumerate(
+                    building.workersNeeded or [], start=1
+                ):
+                    if worker_count == 0:
+                        continue
+                    consumable_optional_missed_count = 0
+                    consumable_essential_missed_count = 0
+                    combination_valid = True
+                    worker = get_worker(worker_type)
+                    for consumable in worker.consumables:
+                        # If consumable is in this combination, calculate its cost
+                        if consumable.matId in consumable_list:
+                            consumable_listing = Exchange.get_listing(consumable.matId)
+                            if consumable_listing.current_price < 1:
+                                # _logger.warning(
+                                #     f"No price data for consumable {consumable_listing.name} ({consumable.matId}), skipping worker cost calculation for recipe {get_item_name(recipe.output.id)} ({recipe.id}). Consumable combination tried: {consumable_list}."
+                                # )
+                                combination_valid = False
+                                break
+                            worker_cost_per_hour += (
+                                consumable_listing.current_price
+                                * consumable.amount
+                                / 24000
+                            )
+                        # If consumable is not in this combination, apply satisfaction penalty
+                        else:
+                            if consumable.essential:
+                                consumable_essential_missed_count += 1
+                            else:
+                                consumable_optional_missed_count += 1
+                    if not combination_valid:
+                        break
+                    worker_satisfaction = 1.0
+                    worker_satisfaction -= 0.1 * consumable_optional_missed_count
+                    worker_satisfaction *= 0.6**consumable_essential_missed_count
+                    worker_satisfaction = max(worker_satisfaction, 0.1)
+                    _profit_per_hour = (
+                        base_profit_per_hour * worker_satisfaction
+                        - worker_cost_per_hour
+                    )
+                    if _profit_per_hour > profit_per_hour:
+                        profit_per_hour = _profit_per_hour
+                        consumable_preferred_combination = consumable_list
+        # _logger.debug(
+        #     f"Preferred consumable combination for recipe {get_item_name(recipe.output.id)} ({recipe.id}): {consumable_preferred_combination} with profit/hr: {profit_per_hour:,.2f}"
+        # )
+        if profit_per_hour == 0.0:
+            _logger.debug(
+                f"Could not calculate profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}). Base profit/hr: {base_profit_per_hour:,.2f}."
+            )
+            return
+
+        if consumable_preferred_combination is None:
+            _logger.error(
+                f"No valid consumable combination found for recipe {get_item_name(recipe.output.id)} ({recipe.id}). This should not happen."
+            )
+            return
+
+        # Add building filter
         checkbox = self.toolbox.add_building_filter(building)
         if checkbox is not None:
             self.recipe_table_proxy_model.set_building_filter(
@@ -602,7 +759,9 @@ class RecipeWindow(QWidget):
             )
 
         # Update recipe table
-        self.recipe_table_model.recipe_table_update(recipe, profit_per_hour)
+        self.recipe_table_model.recipe_table_update(
+            recipe, profit_per_hour, consumable_preferred_combination
+        )
 
     def closeEvent(self, event: QCloseEvent) -> None:
         _logger.debug("Closing RecipeWindow, stopping worker thread.")

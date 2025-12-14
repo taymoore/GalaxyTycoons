@@ -69,7 +69,9 @@ class Building(BaseModel):
     description: str
     cost: Optional[int]  # Unused
     constructionMaterials: List[MaterialAmount]
-    workersNeeded: Optional[List[int]]  # [Worker, Technician, Engineer, Scientist]
+    workersNeeded: Optional[
+        List[int]
+    ]  # Quantity of each type: [Worker, Technician, Engineer, Scientist]
     workersHousing: Optional[List[int]]  # Housing capacity by type
     specialization: BuildingSpecialization
     tier: int

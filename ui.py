@@ -41,7 +41,7 @@ class MainWindow(QMainWindow):
         self.main_layout.addWidget(self.recipe_window)
         self.setCentralWidget(self.recipe_window)
         # self.setMinimumSize(QSize(1000, 600))
-        self.resize(QSize(1000, 600))
+        self.resize(QSize(1400, 600))
 
     def closeEvent(self, event: QEvent) -> None:
         _logger.debug("MainWindow closeEvent called.")
