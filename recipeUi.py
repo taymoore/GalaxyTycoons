@@ -31,15 +31,9 @@ from PySide6.QtWidgets import (
     QCheckBox,
 )
 from PySide6.QtGui import QCloseEvent, QWheelEvent
-from pyqtgraph import (
-    PlotWidget,
-    AxisItem,
-    DateAxisItem,
-    ViewBox,
-    mkPen,
-    functions,
-    Point,
-)
+import pyqtgraph as pg
+import matplotlib.colors as mcolors
+import matplotlib.cm as cm
 
 from utils import align_add
 from api.gameData import get_gamedata, get_item_name, get_building
@@ -61,30 +55,43 @@ class Settings(BaseModel):
 
 
 class RecipeWindow(QWidget):
-    class PriceGraph(PlotWidget):
-        class FmtAxesItem(AxisItem):
+    class PriceGraph(pg.PlotWidget):
+        class FmtAxesItem(pg.AxisItem):
             def tickStrings(self, values, scale, spacing):
                 return [f"{v:,.0f}" for v in values]
 
         def __init__(self, parent=None, background="default", plotItem=None, **kargs):
             kargs["axisItems"] = {
-                "bottom": DateAxisItem(),
+                "bottom": pg.DateAxisItem(),
                 "left": RecipeWindow.PriceGraph.FmtAxesItem(orientation="left"),
                 "right": RecipeWindow.PriceGraph.FmtAxesItem(orientation="right"),
             }
             super().__init__(parent, background, plotItem, **kargs)
 
             self.p1 = self.plotItem
-            self.p1.getAxis("left").setLabel("Price", color="#00ff00")
-            self.p1_pen = mkPen(color="#00ff00", width=2)
+            self.p1.getAxis("left").setLabel("Profit/hr", color="#00ff00")
+            self.p1_pen = pg.mkPen(color="#00ff00", width=2)
+
+            # Label to display the nearest point's value
+            self.label = pg.LabelItem(justify="right", color="#00ff00")
+            scene = self.scene()
+            assert isinstance(scene, pg.GraphicsScene)
+            scene.addItem(self.label)
+
+            # Enable mouse tracking
+            scene.sigMouseMoved.connect(self.on_mouse_moved)
+
+            # Store plotted data points for nearest-point calculation
+            self.data_points = []
+            self.listing_price = []
 
         def auto_range(self):
-            # self.p2.enableAutoRange(axis="y")
             self.p1.vb.updateAutoRange()
-            # self.p2.updateAutoRange()
 
             bounds = [np.inf, -np.inf]
             for item in self.p1.vb.addedItems:
+                if not isinstance(item, pg.PlotDataItem):
+                    continue
                 _bounds = item.dataBounds(0)
                 if _bounds[0] is None or _bounds[1] is None:
                     continue
@@ -106,8 +113,10 @@ class RecipeWindow(QWidget):
                 * vb.state["wheelScaleFactor"]
             )  # actual scaling factor
             s = [(None if m is False else s) for m in mask]
-            center = Point(
-                functions.invertQTransform(vb.childGroup.transform()).map(ev.position())
+            center = pg.Point(
+                pg.functions.invertQTransform(vb.childGroup.transform()).map(
+                    ev.position()
+                )
             )
 
             vb._resetTarget()
@@ -118,8 +127,9 @@ class RecipeWindow(QWidget):
         @Slot(Recipe)
         def plot_recipe(self, recipe: Recipe) -> None:
             self.p1.clear()
-            listing = Exchange.get_listing(recipe.output.id)
+            self.p1.vb.enableAutoRange()
 
+            listing = Exchange.get_listing(recipe.output.id)
             listing.average_price_history.sort_index(inplace=True)
 
             # Convert the index to Unix timestamps (numerical format)
@@ -132,20 +142,37 @@ class RecipeWindow(QWidget):
             y_data = (
                 pd.to_numeric(listing.average_price_history["price"], errors="coerce")
                 * recipe.output.am
-                / (recipe.timeMinutes / 60)
+                / (100 * recipe.timeMinutes / 60)
             )
+
+            # Store data points for nearest-point calculation
+            self.data_points = list(zip(x_data, y_data))
+            self.listing_price = listing.average_price_history["price"].to_numpy() / 100
 
             # Plot the data
             self.p1.plot(
                 x=np.asarray(x_data),
                 y=np.asarray(y_data),
                 pen=self.p1_pen,
-                name="Purchases",
+                name="Profit",
             )
+            # self.label.setText(
+            #     f"Market Price: {self.listing_price[-1]:,.2f}<br>Profit/hr: {y_data.iloc[-1]:,.2f}<br>Time: {pd.to_datetime(x_data[-1], unit='s')}"
+            # )
+            # self.label.setPos(
+            #     pg.Point(x_data[-1], y_data.iloc[-1])
+            #     - self.label.boundingRect().topRight()
+            # )
 
             # Plot each ingredient price
             ingredient_subtotal = None
-            for material_amount in recipe.inputs:
+            colormap = cm.get_cmap("tab10")
+            num_ingredients = len(recipe.inputs)
+            ingredient_colors = [
+                mcolors.to_hex(colormap(i / num_ingredients))
+                for i in range(num_ingredients)
+            ]
+            for material_idx, material_amount in enumerate(recipe.inputs):
                 material_listing = Exchange.get_listing(material_amount.id)
                 material_listing.average_price_history.sort_index(inplace=True)
                 price_history = material_listing.average_price_history.copy()
@@ -155,15 +182,29 @@ class RecipeWindow(QWidget):
                 price_history["price"] = (
                     price_history["price"]
                     * material_amount.am
-                    / (recipe.timeMinutes / 60)
+                    / (100 * recipe.timeMinutes / 60)
                 )
 
+                # Assign a unique color to each ingredient
+                ingredient_color = ingredient_colors[material_idx]
+                pen = pg.mkPen(color=ingredient_color, width=1)
+
+                x = price_history.index.to_numpy()
+                y = price_history["price"].to_numpy()
                 self.p1.plot(
-                    x=price_history.index.to_numpy(),
-                    y=price_history["price"].to_numpy(),
-                    pen=mkPen(width=1),
+                    x=x,
+                    y=y,
+                    pen=pen,
                     name=f"Ingredient: {material_listing.name}",
                 )
+
+                label = pg.TextItem(
+                    text=f"{material_listing.name}\nCost/hr: {y[-1]:,.2f}",
+                    color=ingredient_color,
+                    anchor=(1, 1),
+                )
+                label.setPos(x[-1], y[-1])
+                self.p1.addItem(label)
 
                 ingredient_subtotal = (
                     align_add(ingredient_subtotal, price_history["price"])
@@ -171,15 +212,48 @@ class RecipeWindow(QWidget):
                     else price_history["price"]
                 )
 
-            p1_pen_dashed = mkPen(color="#00ff00", width=1, style=Qt.PenStyle.DashLine)
+            p1_pen_dashed = pg.mkPen(
+                color="#00ff00", width=1, style=Qt.PenStyle.DashLine
+            )
+            x = ingredient_subtotal.index.to_numpy()
+            y = ingredient_subtotal.to_numpy()
             self.p1.plot(
-                x=ingredient_subtotal.index.to_numpy(),
-                y=ingredient_subtotal.to_numpy(),
+                x=x,
+                y=y,
                 pen=p1_pen_dashed,
                 name="Ingredient Total",
             )
+            label = pg.TextItem(
+                text=f"Total Cost/hr: {y[-1]:,.2f}",
+                color="#00ff00",
+                anchor=(1, 1),
+            )
+            label.setPos(x[-1], y[-1])
+            self.p1.addItem(label)
 
             self.auto_range()
+
+        def on_mouse_moved(self, pos):
+            # Convert mouse position to plot coordinates
+            mouse_point = self.p1.vb.mapSceneToView(pos)
+            mouse_x, mouse_y = mouse_point.x(), mouse_point.y()
+
+            # Find the nearest data point
+            if not self.data_points:
+                return
+
+            distances = [
+                (mouse_x - x) ** 2 + (mouse_y - y) ** 2 for x, y in self.data_points
+            ]
+            nearest_index = np.argmin(distances)
+            nearest_x, nearest_y = self.data_points[nearest_index]
+
+            # Update the label with the nearest point's value
+            self.label.setText(
+                f"Market Price: {self.listing_price[nearest_index]:,.2f}<br>Profit/hr: {nearest_y:,.2f}<br>Time: {pd.to_datetime(nearest_x, unit='s')}"
+            )
+            view_point = self.p1.vb.mapViewToScene(pg.Point(nearest_x, nearest_y))
+            self.label.setPos(view_point - self.label.boundingRect().topRight())
 
     class RecipeTableModel(QAbstractTableModel):
 
