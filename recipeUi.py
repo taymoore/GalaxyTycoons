@@ -473,6 +473,9 @@ class RecipeWindow(QWidget):
             def handle_slider_change(self, value: int) -> None:
                 self.label.setText(str(value))
 
+            def value(self) -> int:
+                return self.slider.value()
+
         class BuildingCheckbox(QCheckBox):
             checkbox_toggled = Signal(Building, bool)
 
@@ -493,6 +496,11 @@ class RecipeWindow(QWidget):
             tech_filter_widget = QWidget(self)
             tech_filter_layout = QVBoxLayout()
             tech_filter_widget.setLayout(tech_filter_layout)
+            self.tech_filter_all_widget = RecipeWindow.FilterToolbox.TechFilterWidget(
+                "All", self
+            )
+            self.tech_filter_all_widget.slider.setMaximum(10)
+            tech_filter_layout.addWidget(self.tech_filter_all_widget)
             self.tech_widgets: Dict[
                 BuildingSpecialization, RecipeWindow.FilterToolbox.TechFilterWidget
             ] = {}
@@ -604,12 +612,23 @@ class RecipeWindow(QWidget):
         )
         self.recipe_table_proxy_model = RecipeWindow.RecipeTableProxyModel(self)
         self.recipe_table_proxy_model.setSourceModel(self.recipe_table_model)
+        # Connect each tech slider to the proxy model filter
         for specialization, tech_widget in self.toolbox.tech_widgets.items():
             tech_widget.slider.valueChanged.connect(
-                lambda value, spec=specialization: self.recipe_table_proxy_model.set_tech_level_filter(
-                    spec, value
+                lambda value, spec=specialization, value_modifier=self.toolbox.tech_filter_all_widget.value(): self.recipe_table_proxy_model.set_tech_level_filter(
+                    spec, value + value_modifier
                 )
             )
+        # Connect "All" tech slider to all specialization sliders
+        self.toolbox.tech_filter_all_widget.slider.valueChanged.connect(
+            lambda value, widgets=list(self.toolbox.tech_widgets.items()): [
+                self.recipe_table_proxy_model.set_tech_level_filter(
+                    spec, tech_widget.slider.value() + value
+                )
+                for spec, tech_widget in widgets
+            ]
+        )
+        # Set initial tech level filters from settings
         for specialization, max_level in settings.tech_level_filters.items():
             self.recipe_table_proxy_model.set_tech_level_filter(
                 specialization, max_level
@@ -649,102 +668,13 @@ class RecipeWindow(QWidget):
         building = get_building(recipe.producedIn)
 
         # Calculate profit per hour
-        listing = Exchange.get_listing(recipe.output.id)
-        base_profit_per_hour = listing.current_price * recipe.output.am
-        for material_amount in recipe.inputs:
-            material_price = Exchange.get_listing(material_amount.id).current_price
-            if material_price < 1:
-                _logger.error(
-                    f"No price data for material {material_amount.id}. This should've been caught in RecipeWorker.run()."
-                )
-                raise ValueError(f"No price data for material {material_amount.id}.")
-            base_profit_per_hour -= material_price * material_amount.am
-        base_profit_per_hour = base_profit_per_hour / (recipe.timeMinutes / 60)
-
-        # Calculate worker cost
-        worker_type: WorkerType
-        worker_cost_per_hour_dict: Dict[List[int], float] = (
-            {}
-        )  # consumable matId -> cost per hour
-        profit_per_hour = 0.0
-        # Get list of consumables
-        consumable_id_set: set[int] = set()
-        for worker_type, worker_count in enumerate(
-            building.workersNeeded or [], start=1
-        ):
-            if worker_count == 0:
-                continue
-            worker = get_worker(worker_type)
-            consumable_id_set.update(
-                [consumable.matId for consumable in worker.consumables]
-            )
-        if len(consumable_id_set) == 0:
-            _logger.debug(
-                f"No workers needed for building {building.name} ({building.id})."
-            )
-        # Try all combinations of consumables to find lowest cost
-        consumable_preferred_combination = None
-        for combination_size in range(len(consumable_id_set or []) + 1):
-            for consumable_list in itertools.combinations(
-                consumable_id_set or [], combination_size
-            ):
-                worker_cost_per_hour = 0.0
-                production_modifier = 1.0
-                for worker_type, worker_count in enumerate(
-                    building.workersNeeded or [], start=1
-                ):
-                    if worker_count == 0:
-                        continue
-                    consumable_optional_missed_count = 0
-                    consumable_essential_missed_count = 0
-                    combination_valid = True
-                    worker = get_worker(worker_type)
-                    for consumable in worker.consumables:
-                        # If consumable is in this combination, calculate its cost
-                        if consumable.matId in consumable_list:
-                            consumable_listing = Exchange.get_listing(consumable.matId)
-                            if consumable_listing.current_price < 1:
-                                # _logger.warning(
-                                #     f"No price data for consumable {consumable_listing.name} ({consumable.matId}), skipping worker cost calculation for recipe {get_item_name(recipe.output.id)} ({recipe.id}). Consumable combination tried: {consumable_list}."
-                                # )
-                                combination_valid = False
-                                break
-                            worker_cost_per_hour += (
-                                consumable_listing.current_price
-                                * consumable.amount
-                                / 24000
-                            )
-                        # If consumable is not in this combination, apply satisfaction penalty
-                        else:
-                            if consumable.essential:
-                                consumable_essential_missed_count += 1
-                            else:
-                                consumable_optional_missed_count += 1
-                    if not combination_valid:
-                        break
-                    worker_satisfaction = 1.0
-                    worker_satisfaction -= 0.1 * consumable_optional_missed_count
-                    worker_satisfaction *= 0.6**consumable_essential_missed_count
-                    worker_satisfaction = max(worker_satisfaction, 0.1)
-                    _profit_per_hour = (
-                        base_profit_per_hour * worker_satisfaction
-                        - worker_cost_per_hour
-                    )
-                    if _profit_per_hour > profit_per_hour:
-                        profit_per_hour = _profit_per_hour
-                        consumable_preferred_combination = consumable_list
-        # _logger.debug(
-        #     f"Preferred consumable combination for recipe {get_item_name(recipe.output.id)} ({recipe.id}): {consumable_preferred_combination} with profit/hr: {profit_per_hour:,.2f}"
-        # )
-        if profit_per_hour == 0.0:
-            _logger.debug(
-                f"Could not calculate profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}). Base profit/hr: {base_profit_per_hour:,.2f}."
-            )
-            return
-
-        if consumable_preferred_combination is None:
+        try:
+            if (r := calculate_profit_per_hour(recipe)) is None:
+                return
+            profit_per_hour, consumable_preferred_combination = r
+        except ValueError as e:
             _logger.error(
-                f"No valid consumable combination found for recipe {get_item_name(recipe.output.id)} ({recipe.id}). This should not happen."
+                f"Error calculating profit per hour for recipe {get_item_name(recipe.output.id)} ({recipe.id}): {e}"
             )
             return
 
@@ -787,3 +717,114 @@ class RecipeWindow(QWidget):
         except Exception as e:
             _logger.error(f"Unexpected error saving settings: {e}")
             raise
+
+
+def calculate_profit_per_hour(recipe: Recipe) -> None | tuple[float, tuple[int, ...]]:
+    """
+    Calculate the profit per hour for a given recipe.
+
+    This function computes the profit generated by a recipe on an hourly basis,
+    taking into account the current market prices of the output and input materials,
+    as well as the costs associated with the workers needed to produce the output.
+
+    Args:
+        recipe (Recipe): The recipe for which to calculate the profit per hour.
+
+    Returns:
+        None | tuple[float, tuple[int, ...]]:
+            Returns a tuple containing the profit per hour and a tuple of worker counts
+            if the calculation is successful. Returns None if the calculation cannot be performed.
+
+    Raises:
+        ValueError: If there is no price data available for any of the materials.
+    """
+    building = get_building(recipe.producedIn)
+
+    # Calculate profit per hour
+    listing = Exchange.get_listing(recipe.output.id)
+    base_profit_per_hour = listing.current_price * recipe.output.am
+    for material_amount in recipe.inputs:
+        material_price = Exchange.get_listing(material_amount.id).current_price
+        if material_price < 1:
+            # This should've been caught by recipeWorker.run()
+            raise ValueError(f"No price data for material {material_amount.id}.")
+        base_profit_per_hour -= material_price * material_amount.am
+    base_profit_per_hour = base_profit_per_hour / (recipe.timeMinutes / 60)
+
+    # Calculate worker cost
+    worker_type: WorkerType
+    profit_per_hour = 0.0
+    # Get list of consumables
+    consumable_id_set: set[int] = set()
+    for worker_type, worker_count in enumerate(building.workersNeeded or [], start=1):
+        if worker_count == 0:
+            continue
+        worker = get_worker(worker_type)
+        consumable_id_set.update(
+            [consumable.matId for consumable in worker.consumables]
+        )
+    if len(consumable_id_set) == 0:
+        _logger.debug(
+            f"No workers needed for building {building.name} ({building.id})."
+        )
+    # Try all combinations of consumables to find lowest cost
+    consumable_preferred_combination = None
+    for combination_size in range(len(consumable_id_set or []) + 1):
+        for consumable_list in itertools.combinations(
+            consumable_id_set or [], combination_size
+        ):
+            worker_cost_per_hour = 0.0
+            production_modifier = 1.0
+            for worker_type, worker_count in enumerate(
+                building.workersNeeded or [], start=1
+            ):
+                if worker_count == 0:
+                    continue
+                consumable_optional_missed_count = 0
+                consumable_essential_missed_count = 0
+                combination_valid = True
+                worker = get_worker(worker_type)
+                for consumable in worker.consumables:
+                    # If consumable is in this combination, calculate its cost
+                    if consumable.matId in consumable_list:
+                        consumable_listing = Exchange.get_listing(consumable.matId)
+                        if consumable_listing.current_price < 1:
+                            # _logger.warning(
+                            #     f"No price data for consumable {consumable_listing.name} ({consumable.matId}), skipping worker cost calculation for recipe {get_item_name(recipe.output.id)} ({recipe.id}). Consumable combination tried: {consumable_list}."
+                            # )
+                            combination_valid = False
+                            break
+                        worker_cost_per_hour += (
+                            consumable_listing.current_price * consumable.amount / 24000
+                        )
+                    # If consumable is not in this combination, apply satisfaction penalty
+                    else:
+                        if consumable.essential:
+                            consumable_essential_missed_count += 1
+                        else:
+                            consumable_optional_missed_count += 1
+                if not combination_valid:
+                    break
+                worker_satisfaction = 1.0
+                worker_satisfaction -= 0.1 * consumable_optional_missed_count
+                worker_satisfaction *= 0.6**consumable_essential_missed_count
+                worker_satisfaction = max(worker_satisfaction, 0.1)
+                _profit_per_hour = (
+                    base_profit_per_hour * worker_satisfaction - worker_cost_per_hour
+                )
+                if _profit_per_hour > profit_per_hour:
+                    profit_per_hour = _profit_per_hour
+                    consumable_preferred_combination = consumable_list
+    if profit_per_hour == 0.0:
+        # _logger.debug(
+        #     f"Could not calculate profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}). Base profit/hr: {base_profit_per_hour:,.2f}."
+        # )
+        return
+
+    if consumable_preferred_combination is None:
+        _logger.error(
+            f"No valid consumable combination found for recipe {get_item_name(recipe.output.id)} ({recipe.id}). This should not happen."
+        )
+        return
+
+    return profit_per_hour, consumable_preferred_combination
