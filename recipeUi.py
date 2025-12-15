@@ -431,6 +431,16 @@ class RecipeWindow(QWidget):
             self.tech_level_filters[specialization] = max_tech_level
             self.invalidateFilter()
 
+        @Slot(list, list)
+        def set_tech_level_filters(
+            self,
+            specializations: List[BuildingSpecialization],
+            max_tech_levels: List[int],
+        ) -> None:
+            for specialization, max_tech_level in zip(specializations, max_tech_levels):
+                self.tech_level_filters[specialization] = max_tech_level
+            self.invalidateFilter()
+
         @Slot(int, bool)
         def set_building_filter(self, building: Building, enabled: bool) -> None:
             self.building_filters[building.id] = enabled
@@ -621,12 +631,13 @@ class RecipeWindow(QWidget):
             )
         # Connect "All" tech slider to all specialization sliders
         self.toolbox.tech_filter_all_widget.slider.valueChanged.connect(
-            lambda value, widgets=list(self.toolbox.tech_widgets.items()): [
-                self.recipe_table_proxy_model.set_tech_level_filter(
-                    spec, tech_widget.slider.value() + value
-                )
-                for spec, tech_widget in widgets
-            ]
+            lambda value, widgets=self.toolbox.tech_widgets: self.recipe_table_proxy_model.set_tech_level_filters(
+                list(widgets.keys()),
+                [
+                    value + tech_widget.slider.value()
+                    for tech_widget in widgets.values()
+                ],
+            )
         )
         # Set initial tech level filters from settings
         for specialization, max_level in settings.tech_level_filters.items():
@@ -753,7 +764,7 @@ def calculate_profit_per_hour(recipe: Recipe) -> None | tuple[float, tuple[int, 
 
     # Calculate worker cost
     worker_type: WorkerType
-    profit_per_hour = 0.0
+    optimal_profit_per_hour = 0.0
     # Get list of consumables
     consumable_id_set: set[int] = set()
     for worker_type, worker_count in enumerate(building.workersNeeded or [], start=1):
@@ -775,6 +786,9 @@ def calculate_profit_per_hour(recipe: Recipe) -> None | tuple[float, tuple[int, 
         ):
             worker_cost_per_hour = 0.0
             production_modifier = 1.0
+            worker_count_satisfaction_list: List[tuple[float, float]] = (
+                []
+            )  # worker_count, worker_satisfaction
             for worker_type, worker_count in enumerate(
                 building.workersNeeded or [], start=1
             ):
@@ -805,17 +819,31 @@ def calculate_profit_per_hour(recipe: Recipe) -> None | tuple[float, tuple[int, 
                             consumable_optional_missed_count += 1
                 if not combination_valid:
                     break
-                worker_satisfaction = 1.0
-                worker_satisfaction -= 0.1 * consumable_optional_missed_count
-                worker_satisfaction *= 0.6**consumable_essential_missed_count
-                worker_satisfaction = max(worker_satisfaction, 0.1)
-                _profit_per_hour = (
-                    base_profit_per_hour * worker_satisfaction - worker_cost_per_hour
+                worker_type_satisfaction = 1.0
+                worker_type_satisfaction -= 0.1 * consumable_optional_missed_count
+                worker_type_satisfaction *= 0.6**consumable_essential_missed_count
+                worker_type_satisfaction = max(worker_type_satisfaction, 0.1)
+                worker_count_satisfaction_list.append(
+                    (worker_count, worker_type_satisfaction)
                 )
-                if _profit_per_hour > profit_per_hour:
-                    profit_per_hour = _profit_per_hour
-                    consumable_preferred_combination = consumable_list
-    if profit_per_hour == 0.0:
+            total_worker_count = sum(
+                worker_count for worker_count, _ in worker_count_satisfaction_list
+            )
+            total_worker_satisfaction = (
+                sum(
+                    worker_count * worker_satisfaction / total_worker_count
+                    for worker_count, worker_satisfaction in worker_count_satisfaction_list
+                )
+                if total_worker_count > 0
+                else 0.1
+            )
+            configuration_profit_per_hour = (
+                base_profit_per_hour * total_worker_satisfaction - worker_cost_per_hour
+            )
+            if configuration_profit_per_hour > optimal_profit_per_hour:
+                optimal_profit_per_hour = configuration_profit_per_hour
+                consumable_preferred_combination = consumable_list
+    if optimal_profit_per_hour == 0.0:
         # _logger.debug(
         #     f"Could not calculate profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}). Base profit/hr: {base_profit_per_hour:,.2f}."
         # )
@@ -827,4 +855,4 @@ def calculate_profit_per_hour(recipe: Recipe) -> None | tuple[float, tuple[int, 
         )
         return
 
-    return profit_per_hour, consumable_preferred_combination
+    return optimal_profit_per_hour, consumable_preferred_combination
