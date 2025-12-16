@@ -509,6 +509,8 @@ class RecipeWindow(QWidget):
             self.tech_filter_all_widget = RecipeWindow.FilterToolbox.TechFilterWidget(
                 "All", self
             )
+            self.tech_filter_all_widget.slider.setValue(0)
+            self.tech_filter_all_widget.label.setText("0")
             self.tech_filter_all_widget.slider.setMaximum(10)
             tech_filter_layout.addWidget(self.tech_filter_all_widget)
             self.tech_widgets: Dict[
@@ -809,8 +811,16 @@ def calculate_profit_per_hour(recipe: Recipe) -> None | tuple[float, tuple[int, 
                             combination_valid = False
                             break
                         worker_cost_per_hour += (
-                            consumable_listing.current_price * consumable.amount / 24000
+                            consumable_listing.current_price  # in cents
+                            * consumable.amount  # daily consumption per 1000 workers
+                            * worker_count  # number of workers
+                            / 24  # hours per day
+                            / 1000  # per 1000 workers
+                            / 100  # convert cents to dollars
                         )
+                        # _logger.debug(
+                        #     f"Consumable Price: {consumable_listing.current_price}, Amount: {consumable.amount}, Worker Count: {worker_count}, Cost/hr: {worker_cost_per_hour}"
+                        # )
                     # If consumable is not in this combination, apply satisfaction penalty
                     else:
                         if consumable.essential:
