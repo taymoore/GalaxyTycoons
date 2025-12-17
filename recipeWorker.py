@@ -1,11 +1,13 @@
 from typing import List, Dict
 import logging
-from PySide6.QtCore import QObject, Slot, Signal, QThread, QRunnable
+from PySide6.QtCore import QObject, Slot, Signal, QThread, QRunnable, QSemaphore
 
 from api.models.gameData import Recipe, BuildingSpecialization, Worker, WorkerType
 from api.gameData import get_item_name, get_building, get_worker
 from api.exchange import Exchange
 from api.models.exchange import Listing
+
+FETCH_LISTING_INTERVAL_MS = 1000 * 60 * 30  # 30 minutes
 
 _logger = logging.getLogger(__name__)
 
@@ -13,10 +15,11 @@ _logger = logging.getLogger(__name__)
 class RecipeWorker(QObject):
     recipe_added_signal = Signal(Recipe)
     tech_level_change_signal = Signal(BuildingSpecialization, int)
+    finished = Signal()
 
     def __init__(self, recipies=List[Recipe], tech_level_maximum=None) -> None:
         self.recipies = recipies
-        self.abort = False
+        self.wake_semaphore = QSemaphore(0)
         self.tech_level_maximum: Dict[BuildingSpecialization, int] = (
             {} if tech_level_maximum is None else tech_level_maximum
         )
@@ -26,11 +29,14 @@ class RecipeWorker(QObject):
     def run(self) -> None:
         _logger.debug("RecipeWorker run method called.")
         recipe: Recipe
+        current_thread = QThread.currentThread()
         for recipe in self.recipies:
 
             # Check for abort signal
-            if self.abort:
-                _logger.debug("RecipeWorker run method aborted.")
+            if current_thread.isInterruptionRequested():
+                _logger.debug(
+                    "RecipeWorker run method aborted during recipe processing."
+                )
                 break
 
             # Skip recipes with no inputs (e.g. raw material extraction)
@@ -62,6 +68,18 @@ class RecipeWorker(QObject):
 
             self.recipe_added_signal.emit(recipe)
 
-    def stop(self) -> None:
-        _logger.debug("RecipeWorker stop method called.")
-        self.abort = True
+        # Fetch worker listings on timer
+        while not current_thread.isInterruptionRequested():
+            _logger.debug(
+                "RecipeWorker updating exchange listings in background thread."
+            )
+            # Check for abort signal
+            if self.wake_semaphore.tryAcquire(1, FETCH_LISTING_INTERVAL_MS):
+                _logger.debug("RecipeWorker run method aborted during listing update.")
+                break
+            Exchange.update_listings()
+        _logger.debug("RecipeWorker run method finished.")
+        self.finished.emit()
+
+    def wake_up(self) -> None:
+        self.wake_semaphore.release(1)

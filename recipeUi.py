@@ -670,7 +670,10 @@ class RecipeWindow(QWidget):
         self.recipe_worker_thread.setObjectName("RecipeWorkerThread")
         self.recipe_worker.moveToThread(self.recipe_worker_thread)
         self.recipe_worker_thread.started.connect(self.recipe_worker.run)
-        self.recipe_worker_thread.finished.connect(self.recipe_worker.deleteLater)
+        self.recipe_worker.finished.connect(self.recipe_worker.deleteLater)
+        self.recipe_worker_thread.finished.connect(
+            self.recipe_worker_thread.deleteLater
+        )
 
         self.recipe_worker.recipe_added_signal.connect(self.handle_recipe_added)
 
@@ -708,8 +711,10 @@ class RecipeWindow(QWidget):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         _logger.debug("Closing RecipeWindow, stopping worker thread.")
+        self.recipe_worker_thread.requestInterruption()
+        self.recipe_worker.wake_up()
         self.recipe_worker_thread.quit()
-        if self.recipe_worker_thread.wait():
+        if self.recipe_worker_thread.wait(5000):
             _logger.debug("Worker thread has stopped successfully.")
         else:
             _logger.debug("Worker thread did not stop in time.")
