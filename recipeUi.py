@@ -32,6 +32,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QCheckBox,
     QSplitter,
+    QMenuBar,
+    QWidgetAction,
 )
 from PySide6.QtGui import QCloseEvent, QWheelEvent
 import pyqtgraph as pg
@@ -44,6 +46,7 @@ from api.models.gameData import Recipe, BuildingSpecialization, Building, Worker
 from api.exchange import Exchange
 from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
+from planetsUi import PlanetsUi
 
 CACHE_FILENAME = "settings.pkl"
 CACHE_DIR = ".data"
@@ -606,6 +609,7 @@ class RecipeWindow(QWidget):
         self.main_layout = QHBoxLayout()
         self.setLayout(self.main_layout)
 
+        # Filter Toolbox
         self.toolbox = RecipeWindow.FilterToolbox(self, settings)
         self.toolbox.setSizePolicy(
             QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
