@@ -63,7 +63,7 @@ class Exchange:
     @staticmethod
     def update_listings(force: bool = False):
         current_time = datetime.now()
-        if force | (
+        if force or (
             Exchange.updated_time and current_time - Exchange.updated_time < UPDATE_RATE
         ):
             return

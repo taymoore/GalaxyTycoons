@@ -55,7 +55,7 @@ if __name__ == "__main__":
         format="%(asctime)s - %(levelname)s - %(message)s", level=logging.DEBUG
     )
 
-    UPDATE_LISTINGS_ON_LOAD = False
+    UPDATE_LISTINGS_ON_LOAD = True
     Exchange.load_cache()
     if not UPDATE_LISTINGS_ON_LOAD:
         from datetime import datetime
