@@ -280,7 +280,7 @@ class RecipeWindow(QWidget):
         def columnCount(
             self, /, parent: QModelIndex | QPersistentModelIndex = ...
         ) -> int:
-            return 4
+            return len(self.header_data)
 
         def headerData(
             self,
@@ -342,7 +342,7 @@ class RecipeWindow(QWidget):
             self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.setSortingEnabled(True)
-            self.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+            self.sortByColumn(1, Qt.SortOrder.DescendingOrder)
 
             self.clicked.connect(self.handle_table_clicked)
 
@@ -361,10 +361,10 @@ class RecipeWindow(QWidget):
             """Override setModel to connect signals for dynamic resizing."""
             super().setModel(model)
             if model:
-                model.modelReset.connect(self.adjust_table_width)
+                # model.modelReset.connect(self.adjust_table_width)
                 model.dataChanged.connect(self.adjust_table_width)
                 model.rowsInserted.connect(self.adjust_table_width)
-                model.rowsRemoved.connect(self.adjust_table_width)
+                # model.rowsRemoved.connect(self.adjust_table_width)
 
         def adjust_table_width(self):
             """Adjust the table width to fit the contents."""
@@ -379,10 +379,6 @@ class RecipeWindow(QWidget):
             # Add width for vertical scrollbar (if present)
             if self.verticalScrollBar().isVisible():
                 total_table_width += self.verticalScrollBar().width()
-
-            # Update the table's minimum and maximum width
-            self.setMinimumWidth(total_table_width)
-            self.setMaximumWidth(total_table_width)
 
             # Notify the parent splitter to adjust sizes
             if self.parent() and isinstance(self.parent(), QSplitter):
@@ -623,9 +619,6 @@ class RecipeWindow(QWidget):
 
         self.recipe_table_model = RecipeWindow.RecipeTableModel(self)
         self.recipe_table_view = RecipeWindow.RecipeTableView(self)
-        self.recipe_table_view.setSizePolicy(
-            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
-        )
         self.recipe_table_proxy_model = RecipeWindow.RecipeTableProxyModel(self)
         self.recipe_table_proxy_model.setSourceModel(self.recipe_table_model)
         # Connect each tech slider to the proxy model filter

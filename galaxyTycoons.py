@@ -54,7 +54,13 @@ if __name__ == "__main__":
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(message)s", level=logging.DEBUG
     )
+
+    UPDATE_LISTINGS_ON_LOAD = False
     Exchange.load_cache()
+    if not UPDATE_LISTINGS_ON_LOAD:
+        from datetime import datetime
+
+        Exchange.updated_time = datetime.now()
     Exchange.update_listings()
 
     app = QApplication(sys.argv)

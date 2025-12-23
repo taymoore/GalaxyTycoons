@@ -61,9 +61,11 @@ class Exchange:
         _logger.info("Exchange cache cleared.")
 
     @staticmethod
-    def update_listings():
+    def update_listings(force: bool = False):
         current_time = datetime.now()
-        if Exchange.updated_time and current_time - Exchange.updated_time < UPDATE_RATE:
+        if force | (
+            Exchange.updated_time and current_time - Exchange.updated_time < UPDATE_RATE
+        ):
             return
 
         url = "https://api.g2.galactictycoons.com/public/exchange/mat-prices/"
