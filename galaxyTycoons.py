@@ -1,8 +1,9 @@
 import logging
-from PySide6.QtCore import QSize, QEvent
+from PySide6.QtCore import QSize
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QTabWidget
 
-from api.gameData import get_gamedata, save_gamedata
+from api.gameData import save_gamedata
 from api.exchange import Exchange
 from recipeUi import RecipeWindow
 from planetsUi import PlanetsUi
@@ -30,7 +31,7 @@ class MainWindow(QMainWindow):
         # Set the tabs as the central widget
         self.setCentralWidget(self.tabs)
 
-    def closeEvent(self, event: QEvent) -> None:
+    def closeEvent(self, event: QCloseEvent) -> None:
         """
         Ensure that closing the main window triggers the cleanup
         logic (saving settings, stopping threads) in the sub-widgets.

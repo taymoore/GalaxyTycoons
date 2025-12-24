@@ -14,6 +14,7 @@ _logger = logging.getLogger(__name__)
 
 class RecipeWorker(QObject):
     recipe_added_signal = Signal(Recipe)
+    exchange_updated_signal = Signal(dict)
     tech_level_change_signal = Signal(BuildingSpecialization, int)
     finished = Signal()
 
@@ -78,6 +79,7 @@ class RecipeWorker(QObject):
                 _logger.debug("RecipeWorker run method aborted during listing update.")
                 break
             Exchange.update_listings()
+            self.exchange_updated_signal.emit(Exchange.listings)
         _logger.debug("RecipeWorker run method finished.")
         self.finished.emit()
 

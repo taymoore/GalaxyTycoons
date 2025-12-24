@@ -5,6 +5,7 @@ from pathlib import Path
 from requests import Session, RequestException
 import atexit
 from datetime import datetime, timedelta
+from PySide6.QtCore import Signal
 
 from api.models.exchange import Listing, Listings
 
@@ -15,8 +16,9 @@ UPDATE_RATE = timedelta(minutes=30)
 _logger = logging.getLogger(__name__)
 
 
+listings_updated = Signal(Dict[int, Listing])
 class Exchange:
-    cache: Dict[int, Listing] = {}
+    listings: Dict[int, Listing] = {}
     updated_time: Optional[datetime] = None
     session = Session()
 
@@ -26,19 +28,17 @@ class Exchange:
         try:
             if cache_path.exists():
                 with open(cache_path, "rb") as f:
-                    Exchange.cache = pickle.load(f)
-                    # for listing in Exchange.cache.values():
-                    #     Listing.model_validate(listing)
+                    Exchange.listings = pickle.load(f)
                 _logger.info("Loaded game data from cache file.")
             else:
-                Exchange.cache = {}
+                Exchange.listings = {}
                 _logger.info("No cache file found, starting with empty cache.")
         except (pickle.UnpicklingError, IOError) as e:
             _logger.error(f"Error loading cache from {cache_path}: {e}")
-            Exchange.cache = {}
+            Exchange.listings = {}
         except Exception as e:
             _logger.error(f"Unexpected error loading cache: {e}")
-            Exchange.cache = {}
+            Exchange.listings = {}
 
     @staticmethod
     def _save_to_disk() -> None:
@@ -46,7 +46,7 @@ class Exchange:
         Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
         try:
             with cache_path.open("wb") as f:
-                pickle.dump(Exchange.cache, f)
+                pickle.dump(Exchange.listings, f)
             _logger.info(f"Cache saved to {cache_path}.")
         except IOError as e:
             _logger.error(f"Error saving cache to {cache_path}: {e}")
@@ -57,7 +57,7 @@ class Exchange:
 
     @staticmethod
     def clear_cache() -> None:
-        Exchange.cache = {}
+        Exchange.listings = {}
         _logger.info("Exchange cache cleared.")
 
     @staticmethod
@@ -91,16 +91,16 @@ class Exchange:
             raise ValueError(f"Failed to parse listings data: {e}")
         for listing in listings:
             # Update price history if listing exists in cache
-            if listing.id in Exchange.cache:
-                listing.average_price_history = Exchange.cache[
+            if listing.id in Exchange.listings:
+                listing.average_price_history = Exchange.listings[
                     listing.id
                 ].average_price_history
             listing.average_price_history.loc[datetime.today().isoformat()] = (
                 listing.average_price
             )
-            Exchange.cache[listing.id] = listing
+            Exchange.listings[listing.id] = listing
         _logger.info(
-            f"Exchange listings updated. Total listings: {len(Exchange.cache)}"
+            f"Exchange listings updated. Total listings: {len(Exchange.listings)}"
         )
 
     @staticmethod
@@ -114,9 +114,9 @@ class Exchange:
     @staticmethod
     def get_listing(id: int) -> Optional[Listing]:
         current_time = datetime.now()
-        if id in Exchange.cache:
+        if id in Exchange.listings:
             if current_time - Exchange.updated_time < UPDATE_RATE:
-                return Exchange.cache.get(id)
+                return Exchange.listings.get(id)
             else:
                 _logger.info(f"Cache for listing {id} is stale, fetching new data.")
         else:
@@ -124,4 +124,4 @@ class Exchange:
 
         # TODO: Could use update single listing from API
         Exchange.update_listings()
-        return Exchange.cache.get(id)
+        return Exchange.listings.get(id)
