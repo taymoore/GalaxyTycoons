@@ -2,12 +2,12 @@ from typing import List, Dict
 import logging
 from PySide6.QtCore import QObject, Slot, Signal, QThread, QRunnable, QSemaphore
 
-from api.models.gameData import Recipe, BuildingSpecialization, Worker, WorkerType
+from api.models.gameData import Recipe, BuildingSpecialization, RecipeType, Worker, WorkerType
 from api.gameData import get_item_name, get_building, get_worker
 from api.exchange import Exchange
 from api.models.exchange import Listing
 
-FETCH_LISTING_INTERVAL_MS = 1000 * 60 * 30  # 30 minutes
+FETCH_LISTING_INTERVAL_MS = 1000 * 60 * 15  # 15 minutes
 
 _logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class RecipeWorker(QObject):
                 break
 
             # Skip recipes with no inputs (e.g. raw material extraction)
-            if len(recipe.inputs) == 0:
+            if len(recipe.inputs) == 0 or recipe.type == RecipeType.EXTRACTION:
                 continue
 
             assert isinstance(recipe, Recipe)
@@ -58,14 +58,6 @@ class RecipeWorker(QObject):
                     building.specialization, recipe.reqTech
                 )
                 self.tech_level_maximum[building.specialization] = recipe.reqTech
-
-            # Skip if inputs are unavailable
-            for material_amount in recipe.inputs:
-                material_price = Exchange.get_listing(material_amount.id).current_price
-                if material_price < 1:
-                    break
-            if material_price < 1:
-                continue
 
             self.recipe_added_signal.emit(recipe)
 

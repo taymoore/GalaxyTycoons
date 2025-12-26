@@ -6,6 +6,7 @@ from requests import Session, RequestException
 import atexit
 from datetime import datetime, timedelta
 from PySide6.QtCore import Signal
+import pandas as pd
 
 from api.models.exchange import Listing, Listings
 
@@ -89,14 +90,21 @@ class Exchange:
             listings = Listings.model_validate(data["prices"])
         except Exception as e:
             raise ValueError(f"Failed to parse listings data: {e}")
+
         for listing in listings:
             # Update price history if listing exists in cache
             if listing.id in Exchange.listings:
                 listing.average_price_history = Exchange.listings[
                     listing.id
                 ].average_price_history
+                listing.current_price_history = Exchange.listings[
+                    listing.id
+                ].current_price_history
             listing.average_price_history.loc[datetime.today().isoformat()] = (
                 listing.average_price
+            )
+            listing.current_price_history.loc[datetime.today().isoformat()] = (
+                listing.current_price
             )
             Exchange.listings[listing.id] = listing
         _logger.info(

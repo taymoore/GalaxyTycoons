@@ -73,7 +73,6 @@ class RecipeWindow(QWidget):
             self.p1 = self.plotItem
             assert isinstance(self.p1, pg.PlotItem)
             self.p1.getAxis("left").setLabel("Profit/hr", color="#00ff00")
-            self.p1_pen = pg.mkPen(color="#00ff00", width=2)
 
             # Label to display the nearest point's value
             self.label = pg.LabelItem(justify="right", color="#00ff00")
@@ -136,28 +135,43 @@ class RecipeWindow(QWidget):
             listing.average_price_history.sort_index(inplace=True)
 
             # Convert the index to Unix timestamps (numerical format)
-            x_data = (
+            output_average_price_index = (
                 pd.to_datetime(listing.average_price_history.index).astype("int64")
                 // 10**9
             )
 
             # Ensure y_data is numeric
-            y_data = (
+            output_average_price = (
                 pd.to_numeric(listing.average_price_history["price"], errors="coerce")
+                * recipe.output.am
+                / (100 * recipe.timeMinutes / 60)
+            )
+            output_current_price_index = (
+                pd.to_datetime(listing.current_price_history.index).astype("int64")
+                // 10**9
+            )
+            output_current_price = (
+                pd.to_numeric(listing.current_price_history["price"], errors="coerce")
                 * recipe.output.am
                 / (100 * recipe.timeMinutes / 60)
             )
 
             # Store data points for nearest-point calculation
-            self.data_points = list(zip(x_data, y_data))
+            self.data_points = list(zip(output_average_price_index, output_average_price))
             self.listing_price = listing.average_price_history["price"].to_numpy() / 100
 
             # Plot the data
             self.p1.plot(
-                x=np.asarray(x_data),
-                y=np.asarray(y_data),
-                pen=self.p1_pen,
-                name="Profit",
+                x=np.asarray(output_average_price_index),
+                y=np.asarray(output_average_price),
+                pen=pg.mkPen(color="#00ff00", width=2),
+                name="Average Profit",
+            )
+            self.p1.plot(
+                x=np.asarray(output_current_price_index),
+                y=np.asarray(output_current_price),
+                pen=pg.mkPen(color="#00ff00", width=2, style=Qt.PenStyle.DashLine),
+                name="Current Profit",
             )
             # self.label.setText(
             #     f"Market Price: {self.listing_price[-1]:,.2f}<br>Profit/hr: {y_data.iloc[-1]:,.2f}<br>Time: {pd.to_datetime(x_data[-1], unit='s')}"
@@ -168,7 +182,8 @@ class RecipeWindow(QWidget):
             # )
 
             # Plot each ingredient price
-            ingredient_subtotal = None
+            ingredient_average_price_subtotal = None
+            ingredient_current_price_subtotal = None
             colormap = cm.get_cmap("tab10")
             num_ingredients = len(recipe.inputs)
             ingredient_colors = [
@@ -178,60 +193,79 @@ class RecipeWindow(QWidget):
             for material_idx, material_amount in enumerate(recipe.inputs):
                 material_listing = Exchange.get_listing(material_amount.id)
                 material_listing.average_price_history.sort_index(inplace=True)
-                price_history = material_listing.average_price_history.copy()
-                price_history.index = (
-                    pd.to_datetime(price_history.index).astype("int64") // 10**9
+                input_average_price = material_listing.average_price_history.copy()
+                input_current_price = material_listing.current_price_history.copy()
+                input_average_price.index = (
+                    pd.to_datetime(input_average_price.index).astype("int64") // 10**9
                 )
-                price_history["price"] = (
-                    price_history["price"]
+                input_average_price["price"] = (
+                    input_average_price["price"]
                     * material_amount.am
                     / (100 * recipe.timeMinutes / 60)
                 )
+                input_current_price.index = (
+                    pd.to_datetime(input_current_price.index).astype("int64") // 10**9
+                )
+                input_current_price["price"] = (
+                    input_current_price["price"]
+                    * material_amount.am
+                    / (100 * recipe.timeMinutes / 60)
+                )
+                # _logger.debug(f"Plotting ingredient {material_listing.name} ({material_amount.id}). Latest average price history: {material_listing.average_price_history['price'].iloc[-1]/100:.2f}.")
 
                 # Assign a unique color to each ingredient
                 ingredient_color = ingredient_colors[material_idx]
-                pen = pg.mkPen(color=ingredient_color, width=1)
 
-                x = price_history.index.to_numpy()
-                y = price_history["price"].to_numpy()
                 self.p1.plot(
-                    x=x,
-                    y=y,
-                    pen=pen,
-                    name=f"Ingredient: {material_listing.name}",
+                    x=input_average_price.index.to_numpy(),
+                    y=input_average_price["price"].to_numpy(),
+                    pen=pg.mkPen(color=ingredient_color, width=1),
+                    name=f"Average Ingredient: {material_listing.name}",
+                )
+                self.p1.plot(
+                    x=input_current_price.index.to_numpy(),
+                    y=input_current_price["price"].to_numpy(),
+                    pen=pg.mkPen(color=ingredient_color, width=1, style=Qt.PenStyle.DashLine),
+                    name=f"Current Ingredient: {material_listing.name}",
                 )
 
                 label = pg.TextItem(
-                    text=f"{material_listing.name}\nCost/hr: {y[-1]:,.2f}",
+                    text=f"{material_listing.name}\nAv Cost/hr: {input_average_price['price'].iloc[-1]:,.2f}\nCurr Cost/hr: {input_current_price['price'].iloc[-1]:,.2f}",
                     color=ingredient_color,
                     anchor=(1, 1),
                 )
-                label.setPos(x[-1], y[-1])
+                label.setPos(input_current_price.index[-1], input_current_price["price"].iloc[-1])
                 self.p1.addItem(label)
 
-                ingredient_subtotal = (
-                    align_add(ingredient_subtotal, price_history["price"])
-                    if ingredient_subtotal is not None
-                    else price_history["price"]
+                ingredient_average_price_subtotal = (
+                    align_add(ingredient_average_price_subtotal, input_average_price["price"])
+                    if ingredient_average_price_subtotal is not None
+                    else input_average_price["price"]
+                )
+                ingredient_current_price_subtotal = (
+                    align_add(ingredient_current_price_subtotal, input_current_price["price"])
+                    if ingredient_current_price_subtotal is not None
+                    else input_current_price["price"]
                 )
 
-            p1_pen_dashed = pg.mkPen(
-                color="#00ff00", width=1, style=Qt.PenStyle.DashLine
-            )
-            x = ingredient_subtotal.index.to_numpy()
-            y = ingredient_subtotal.to_numpy()
             self.p1.plot(
-                x=x,
-                y=y,
-                pen=p1_pen_dashed,
-                name="Ingredient Total",
+                x=ingredient_average_price_subtotal.index.to_numpy(),
+                y=ingredient_average_price_subtotal.to_numpy(),
+                pen=pg.mkPen(color="#ff0000", width=2),
+                name="Average Ingredient Total",
+            )
+            self.p1.plot(
+                x=ingredient_current_price_subtotal.index.to_numpy(),
+                y=ingredient_current_price_subtotal.to_numpy(),
+                pen=pg.mkPen(color="#ff0000", width=2, style=Qt.PenStyle.DashLine),
+                name="Current Ingredient Total",
             )
             label = pg.TextItem(
-                text=f"Total Cost/hr: {y[-1]:,.2f}",
-                color="#00ff00",
+                text=f"Average Cost/hr: {ingredient_average_price_subtotal.iloc[-1]:,.2f}\nCurrent Cost/hr: {ingredient_current_price_subtotal.iloc[-1]:,.2f}",
+                color="#ff0000",
                 anchor=(1, 1),
             )
-            label.setPos(x[-1], ingredient_subtotal[x[-1]])
+            label.setPos(ingredient_average_price_subtotal.index[-1], ingredient_average_price_subtotal.iloc[-1])
             self.p1.addItem(label)
 
             self.auto_range()
@@ -300,7 +334,7 @@ class RecipeWindow(QWidget):
             data = self.table_data[row][column]
             if role == Qt.ItemDataRole.DisplayRole:
                 if column == 1:
-                    data = "{:,.2f}".format(data / 100) if data != -1 else ""
+                    data = "{:,.2f}".format(data) if data != -1 else ""
                 return data
             elif role == Qt.ItemDataRole.UserRole:
                 return data
@@ -699,8 +733,10 @@ class RecipeWindow(QWidget):
         # Calculate profit and consumables
         result = calculate_profit_and_consumables(recipe)
         if result is None:
-            return
-        profit_per_hour, consumable_preferred_combination = result
+            profit_per_hour = float("-inf")
+            consumable_preferred_combination = ()
+        else:
+            profit_per_hour, consumable_preferred_combination = result
 
         # Add building filter
         checkbox = self.toolbox.add_building_filter(building)
@@ -728,8 +764,10 @@ class RecipeWindow(QWidget):
         for row, recipe in enumerate(self.recipe_table_model.recipes):
             result = calculate_profit_and_consumables(recipe)
             if result is None:
-                continue
-            profit_per_hour, consumable_preferred_combination = result
+                profit_per_hour = float("-inf")
+                consumable_preferred_combination = ()
+            else:
+                profit_per_hour, consumable_preferred_combination = result
 
             self.recipe_table_model.setData(self.recipe_table_model.index(row, 1), profit_per_hour, Qt.ItemDataRole.EditRole)
             self.recipe_table_model.setData(self.recipe_table_model.index(row, 3), ", ".join(sorted(get_item_name(mat_id) for mat_id in consumable_preferred_combination)), Qt.ItemDataRole.EditRole)
@@ -777,19 +815,20 @@ def calculate_profit_and_consumables(recipe: Recipe) -> None | tuple[float, tupl
     try:
         building = get_building(recipe.producedIn)
         listing = Exchange.get_listing(recipe.output.id)
-        base_profit_per_hour = listing.current_price * recipe.output.am
+        base_profit_per_hour = listing.current_price * recipe.output.am / 100
 
         for material_amount in recipe.inputs:
-            material_price = Exchange.get_listing(material_amount.id).current_price
+            material_price = Exchange.get_listing(material_amount.id).current_price / 100
             if material_price < 1:
-                raise ValueError(f"No price data for material {material_amount.id}.")
+                return None
+                raise ValueError(f"No price data for material {get_item_name(material_amount.id)} ({material_amount.id}).")
             base_profit_per_hour -= material_price * material_amount.am
 
         base_profit_per_hour = base_profit_per_hour / (recipe.timeMinutes / 60)
 
         # Calculate worker cost
         worker_type: WorkerType
-        optimal_profit_per_hour = 0.0
+        optimal_profit_per_hour = float("-inf")
         # Get list of consumables
         consumable_id_set: set[int] = set()
         for worker_type, worker_count in enumerate(building.workersNeeded or [], start=1):
@@ -810,7 +849,6 @@ def calculate_profit_and_consumables(recipe: Recipe) -> None | tuple[float, tupl
                 consumable_id_set or [], combination_size
             ):
                 worker_cost_per_hour = 0.0
-                production_modifier = 1.0
                 worker_count_satisfaction_list: List[tuple[float, float]] = (
                     []
                 )  # worker_count, worker_satisfaction
@@ -870,16 +908,17 @@ def calculate_profit_and_consumables(recipe: Recipe) -> None | tuple[float, tupl
                     if total_worker_count > 0
                     else 0.1
                 )
+                assert 0.0 < total_worker_satisfaction <= 1.0
                 configuration_profit_per_hour = (
                     base_profit_per_hour * total_worker_satisfaction - worker_cost_per_hour
                 )
                 if configuration_profit_per_hour > optimal_profit_per_hour:
                     optimal_profit_per_hour = configuration_profit_per_hour
                     consumable_preferred_combination = consumable_list
-        if optimal_profit_per_hour == 0.0:
-            # _logger.debug(
-            #     f"Could not calculate profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}). Base profit/hr: {base_profit_per_hour:,.2f}."
-            # )
+        if optimal_profit_per_hour == float("-inf"):
+            _logger.debug(
+                f"Could not calculate profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}). Base profit/hr: {base_profit_per_hour:,.2f}."
+            )
             return
 
         if consumable_preferred_combination is None:
@@ -890,5 +929,5 @@ def calculate_profit_and_consumables(recipe: Recipe) -> None | tuple[float, tupl
 
         return optimal_profit_per_hour, consumable_preferred_combination
     except Exception as e:
-        _logger.error(f"Error calculating profit for recipe {recipe.id}: {e}")
+        _logger.error(f"Error calculating profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}): {e}")
         return None
