@@ -87,21 +87,6 @@ class RecipeWindow(QWidget):
             self.data_points = []
             self.listing_price = []
 
-        def auto_range(self):
-            self.p1.vb.updateAutoRange()
-
-            bounds = [np.inf, -np.inf]
-            for item in self.p1.vb.addedItems:
-                if not isinstance(item, pg.PlotDataItem):
-                    continue
-                _bounds = item.dataBounds(0)
-                if _bounds[0] is None or _bounds[1] is None:
-                    continue
-                bounds[0] = min(_bounds[0], bounds[0])
-                bounds[1] = max(_bounds[1], bounds[1])
-            if bounds[0] != np.inf and bounds[1] != -np.inf:
-                self.p1.vb.setRange(xRange=bounds)
-
         def wheelEvent(self, ev, axis=None):
             super().wheelEvent(ev)
             vb = self.p1.vb
@@ -268,7 +253,7 @@ class RecipeWindow(QWidget):
             label.setPos(ingredient_average_price_subtotal.index[-1], ingredient_average_price_subtotal.iloc[-1])
             self.p1.addItem(label)
 
-            self.auto_range()
+            self.p1.vb.autoRange()
 
         def on_mouse_moved(self, pos):
             # Convert mouse position to plot coordinates
@@ -754,7 +739,7 @@ class RecipeWindow(QWidget):
         )
 
     @Slot(dict)
-    def handle_exchange_updated(self, listings: Dict[int, Listing]) -> None:
+    def handle_exchange_updated(self) -> None:
         """
         Update the profit per hour for all recipes in the table when listings are updated.
 

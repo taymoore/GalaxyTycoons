@@ -14,7 +14,7 @@ _logger = logging.getLogger(__name__)
 
 class RecipeWorker(QObject):
     recipe_added_signal = Signal(Recipe)
-    exchange_updated_signal = Signal(dict)
+    exchange_updated_signal = Signal()
     tech_level_change_signal = Signal(BuildingSpecialization, int)
     finished = Signal()
 
@@ -49,10 +49,8 @@ class RecipeWorker(QObject):
             if get_item_name(listing.id) == "TEMP":
                 continue
 
-            # Calculate some stats
-            building = get_building(recipe.producedIn)
-
             # Update tech level slider to the maximum
+            building = get_building(recipe.producedIn)
             if recipe.reqTech > self.tech_level_maximum.get(building.specialization, 1):
                 self.tech_level_change_signal.emit(
                     building.specialization, recipe.reqTech
@@ -71,7 +69,7 @@ class RecipeWorker(QObject):
                 _logger.debug("RecipeWorker run method aborted during listing update.")
                 break
             Exchange.update_listings()
-            self.exchange_updated_signal.emit(Exchange.listings)
+            self.exchange_updated_signal.emit()
         _logger.debug("RecipeWorker run method finished.")
         self.finished.emit()
 

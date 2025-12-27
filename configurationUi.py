@@ -52,50 +52,15 @@ from recipeWorker import RecipeWorker
 _logger = logging.getLogger(__name__)
 
 
-class InvestmentsWindow(QWidget):
+class ConfigurationWindow(QWidget):
 
-    class TechToolbox(QToolBox):
-        class TechWidget(QGroupBox):
-            class TechSlider(QSlider):
-                def __init__(
-                    self, orientation: Qt.Orientation, parent: QObject
-                ) -> None:
-                    super().__init__(orientation, parent)
-                    self.setTickPosition(QSlider.TickPosition.TicksBelow)
-                    self.setMinimum(0)
-                    self.setMaximum(1)
-                    self.setTickInterval(1)
+    class InvestmentInputWidget(QWidget):
+        def __init__(self, parent: QWidget | None = None) -> None:
+            super().__init__(parent)
+            self.layout = QHBoxLayout()
+            self.setLayout(self.layout)
 
-                def wheelEvent(self, event: QWheelEvent) -> None:
-                    event.ignore()
-
-            def __init__(self, title: str, parent: QObject) -> None:
-                super().__init__(title, parent)
-
-                self.layout = QHBoxLayout()
-
-                self.slider = self.TechSlider(Qt.Orientation.Horizontal, self)
-                self.layout.addWidget(self.slider)
-
-                self.label = QLabel("1", self)
-                self.layout.addWidget(self.label)
-
-                self.slider.valueChanged.connect(self.handle_slider_change)
-
-                self.setLayout(self.layout)
-
-            def set_maximum(self, max_value: int) -> None:
-                self.slider.setMaximum(max_value)
-                self.slider.setValue(max_value)
-
-            def handle_slider_change(self, value: int) -> None:
-                self.label.setText(str(value))
-
-            def value(self) -> int:
-                return self.slider.value()
-
-
-    class InvestmentsTableModel(QAbstractTableModel):
+    class ConfigurationTableModel(QAbstractTableModel):
         def __init__(self, parent: QObject):
             super().__init__(parent)
             self.table_data: List[List[str]] = []
@@ -132,7 +97,7 @@ class InvestmentsWindow(QWidget):
                 return data
 
 
-    class InvestmentsTableView(QTableView):
+    class ConfigurationTableView(QTableView):
         def __init__(self, parent):
             super().__init__(parent)
             self.horizontalHeader().setSectionResizeMode(
@@ -172,7 +137,7 @@ class InvestmentsWindow(QWidget):
                     [total_table_width, self.parent().width() - total_table_width]
                 )
 
-    class InvestmentsTableProxyModel(QSortFilterProxyModel):
+    class ConfigurationTableProxyModel(QSortFilterProxyModel):
         def __init__(self, parent: QObject | None):
             super().__init__(parent)
             # self.setDynamicSortFilter(True)
@@ -186,10 +151,10 @@ class InvestmentsWindow(QWidget):
         self.main_layout = QVBoxLayout()
         self.setLayout(self.main_layout)
 
-        # Investments table
-        self.investments_table_model = InvestmentsWindow.InvestmentsTableModel(self)
-        self.investments_table_view = InvestmentsWindow.InvestmentsTableView(self)
-        self.investments_table_proxy_model = InvestmentsWindow.InvestmentsTableProxyModel(self)
-        self.investments_table_proxy_model.setSourceModel(self.investments_table_model)
-        self.investments_table_view.setModel(self.investments_table_proxy_model)
-        self.main_layout.addWidget(self.investments_table_view)
+        # Configuration table
+        self.configuration_table_model = ConfigurationWindow.ConfigurationTableModel(self)
+        self.configuration_table_view = ConfigurationWindow.ConfigurationTableView(self)
+        self.configuration_table_proxy_model = ConfigurationWindow.ConfigurationTableProxyModel(self)
+        self.configuration_table_proxy_model.setSourceModel(self.configuration_table_model)
+        self.configuration_table_view.setModel(self.configuration_table_proxy_model)
+        self.main_layout.addWidget(self.configuration_table_view)

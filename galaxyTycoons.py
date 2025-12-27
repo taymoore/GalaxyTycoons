@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QMainWindow, QTabWidget
 
 from api.gameData import save_gamedata
 from api.exchange import Exchange
+from configurationUi import ConfigurationWindow
 from recipeUi import RecipeWindow
 from planetsUi import PlanetsWindow
 from investmentsUi import InvestmentsWindow
@@ -25,11 +26,13 @@ class MainWindow(QMainWindow):
         self.recipe_tab = RecipeWindow(self)
         self.planets_tab = PlanetsWindow(self)
         self.investments_tab = InvestmentsWindow(self)
+        self.configuration_tab = ConfigurationWindow(self)
 
         # Add tabs
         self.tabs.addTab(self.recipe_tab, "Recipes & Profits")
         self.tabs.addTab(self.planets_tab, "Planets")
         self.tabs.addTab(self.investments_tab, "Investments")
+        self.tabs.addTab(self.configuration_tab, "Configuration")
 
         # Set the tabs as the central widget
         self.setCentralWidget(self.tabs)
