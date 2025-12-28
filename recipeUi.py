@@ -1,3 +1,4 @@
+from tkinter import SE
 from typing import List, Dict
 import logging
 import itertools
@@ -37,6 +38,7 @@ import pyqtgraph as pg
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
+from settings import Settings
 from utils import align_add
 from api.gameData import get_gamedata, get_item_name, get_building, get_worker
 from api.models.gameData import Recipe, BuildingSpecialization, Building, WorkerType
@@ -44,17 +46,7 @@ from api.exchange import Exchange
 from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
 
-CACHE_FILENAME = "settings.pkl"
-CACHE_DIR = ".data"
-
 _logger = logging.getLogger(__name__)
-_logger.setLevel(logging.DEBUG)
-
-
-class Settings(BaseModel):
-    tech_level_filters: Dict[BuildingSpecialization, int] = Field(default_factory=dict)
-    tech_level_maximums: Dict[BuildingSpecialization, int] = Field(default_factory=dict)
-
 
 class RecipeWindow(QWidget):
     class PriceGraph(pg.PlotWidget):
@@ -233,12 +225,14 @@ class RecipeWindow(QWidget):
                     else input_current_price["price"]
                 )
 
+            ingredient_average_price_subtotal.dropna(inplace=True)
             self.p1.plot(
                 x=ingredient_average_price_subtotal.index.to_numpy(),
                 y=ingredient_average_price_subtotal.to_numpy(),
                 pen=pg.mkPen(color="#ff0000", width=2),
                 name="Average Ingredient Total",
             )
+            ingredient_current_price_subtotal.dropna(inplace=True)
             self.p1.plot(
                 x=ingredient_current_price_subtotal.index.to_numpy(),
                 y=ingredient_current_price_subtotal.to_numpy(),
@@ -253,7 +247,10 @@ class RecipeWindow(QWidget):
             label.setPos(ingredient_average_price_subtotal.index[-1], ingredient_average_price_subtotal.iloc[-1])
             self.p1.addItem(label)
 
-            self.p1.vb.autoRange()
+            try:
+                self.p1.vb.autoRange()
+            except Exception as e:
+                _logger.error(f"Error during autoRange: {e}")
 
         def on_mouse_moved(self, pos):
             # Convert mouse position to plot coordinates
@@ -419,13 +416,14 @@ class RecipeWindow(QWidget):
                 )
 
     class RecipeTableProxyModel(QSortFilterProxyModel):
-        def __init__(self, parent: QObject | None):
+        def __init__(self, parent: QObject | None, settings: Settings = None) -> None:
             super().__init__(parent)
             self.setDynamicSortFilter(True)
             self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
             self.sort(1, Qt.SortOrder.DescendingOrder)
-            self.tech_level_filters: Dict[BuildingSpecialization, int] = {}
+            self.tech_level_filters: Dict[BuildingSpecialization, int] = settings.tech_level_filters if settings else {}
             self.building_filters: Dict[int, bool] = {}
+            self.tech_level_modifier: int = 0
 
         def lessThan(self, source_left: QModelIndex, source_right: QModelIndex) -> bool:
             if source_left.column() == 1:
@@ -441,41 +439,21 @@ class RecipeWindow(QWidget):
 
             # Filter based on tech
             building_specialization = get_building(recipe.producedIn).specialization
-            try:
-                if recipe.reqTech > self.tech_level_filters[building_specialization]:
-                    return False
-            except KeyError:
-                _logger.error(
-                    f"No tech level filter set for {building_specialization}."
-                )
-            try:
-                if not self.building_filters[recipe.producedIn]:
-                    return False
-            except KeyError:
-                _logger.error(f"No building filter set for {recipe.producedIn}.")
+            max_tech_level = self.tech_level_filters.get(building_specialization, float('inf'))
+            if recipe.reqTech > max_tech_level + self.tech_level_modifier: 
+                return False
+            
+            # Filter based on building
+            if not self.building_filters.get(recipe.producedIn, True):
+                return False
+            
             return super().filterAcceptsRow(source_row, source_parent)
-
-        @Slot(BuildingSpecialization, int)
-        def set_tech_level_filter(
-            self, specialization: BuildingSpecialization, max_tech_level: int
-        ) -> None:
-            self.tech_level_filters[specialization] = max_tech_level
-            self.invalidateFilter()
-
-        @Slot(list, list)
-        def set_tech_level_filters(
-            self,
-            specializations: List[BuildingSpecialization],
-            max_tech_levels: List[int],
-        ) -> None:
-            for specialization, max_tech_level in zip(specializations, max_tech_levels):
-                self.tech_level_filters[specialization] = max_tech_level
-            self.invalidateFilter()
 
         @Slot(int, bool)
         def set_building_filter(self, building: Building, enabled: bool) -> None:
+            self.beginFilterChange()
             self.building_filters[building.id] = enabled
-            self.invalidateFilter()
+            self.endFilterChange()
 
     class FilterToolbox(QToolBox):
         class TechFilterWidget(QGroupBox):
@@ -529,6 +507,8 @@ class RecipeWindow(QWidget):
             @Slot(bool)
             def handle_toggle(self, checked: bool) -> None:
                 self.checkbox_toggled.emit(self.building, checked)
+        
+        techSliderChanged = Signal(BuildingSpecialization, int)
 
         def __init__(self, parent: QObject, settings: Settings) -> None:
             super().__init__(parent)
@@ -542,19 +522,30 @@ class RecipeWindow(QWidget):
             )
             self.tech_filter_all_widget.slider.setValue(0)
             self.tech_filter_all_widget.label.setText("0")
-            self.tech_filter_all_widget.slider.setMaximum(10)
+            self.tech_filter_all_widget.slider.setMaximum(19)
             tech_filter_layout.addWidget(self.tech_filter_all_widget)
             self.tech_widgets: Dict[
                 BuildingSpecialization, RecipeWindow.FilterToolbox.TechFilterWidget
             ] = {}
             for specialization in BuildingSpecialization:
-                if specialization == BuildingSpecialization.NONE:
+                if specialization == BuildingSpecialization.NONE or specialization == BuildingSpecialization.RESOURCE_EXTRACTION:
                     continue
                 tech_widget = RecipeWindow.FilterToolbox.TechFilterWidget(
                     BuildingSpecialization(specialization).name.title(), self
                 )
                 self.tech_widgets[specialization] = tech_widget
                 tech_filter_layout.addWidget(tech_widget)
+            # Initialize slider values from settings
+            for specialization, max_level in settings.tech_level_maximums.items():
+                self.tech_widgets[specialization].set_maximum(max_level)
+            for specialization, filter_level in settings.tech_level_filters.items():
+                self.tech_widgets[specialization].slider.setValue(filter_level)
+            for specialization, tech_widget in self.tech_widgets.items():
+                tech_widget.slider.valueChanged.connect(
+                    lambda value, spec=specialization: self.techSliderChanged.emit(
+                        spec, value
+                    )
+                )
             self.addItem(tech_filter_widget, "Tech Level")
 
             # Building Filter
@@ -573,7 +564,6 @@ class RecipeWindow(QWidget):
             self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
             self.setMinimumWidth(145)
 
-            self.set_tech_level_sliders(settings)
 
         @Slot(bool)
         def handle_building_filter_all_toggle(self, checked: bool) -> None:
@@ -614,31 +604,20 @@ class RecipeWindow(QWidget):
                 tech_level_maximums[specialization] = tech_widget.slider.maximum()
             return tech_level_maximums
 
-        def set_tech_level_sliders(self, settings: Settings) -> None:
-            for specialization, max_level in settings.tech_level_maximums.items():
-                self.tech_widgets[specialization].set_maximum(max_level)
-            for specialization, filter_level in settings.tech_level_filters.items():
-                self.tech_widgets[specialization].slider.setValue(filter_level)
 
-    def __init__(self, parent: QObject) -> None:
-        cache_path = Path(CACHE_DIR) / CACHE_FILENAME
-        if cache_path.exists():
-            try:
-                with cache_path.open("rb") as f:
-                    settings = pickle.load(f)
-                _logger.debug(f"Loaded settings from {cache_path}.")
-            except (IOError, pickle.UnpicklingError) as e:
-                _logger.error(f"Error loading settings from {cache_path}: {e}")
-                settings = Settings()
-        else:
-            settings = Settings()
-
+    def __init__(self, parent: QObject, recipe_worker: RecipeWorker, settings: Settings) -> None:
         super().__init__(parent)
+        
+        # TODO: Remove this reference cycle
+        self.settings = settings
+
+        # Store reference to recipe worker
+        self.recipe_worker = recipe_worker
         self.main_layout = QHBoxLayout()
         self.setLayout(self.main_layout)
 
         # Filter Toolbox
-        self.toolbox = RecipeWindow.FilterToolbox(self, settings)
+        self.toolbox = RecipeWindow.FilterToolbox(self, self.settings)
         self.toolbox.setSizePolicy(
             QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
         )
@@ -651,30 +630,12 @@ class RecipeWindow(QWidget):
 
         self.recipe_table_model = RecipeWindow.RecipeTableModel(self)
         self.recipe_table_view = RecipeWindow.RecipeTableView(self)
-        self.recipe_table_proxy_model = RecipeWindow.RecipeTableProxyModel(self)
+        self.recipe_table_proxy_model = RecipeWindow.RecipeTableProxyModel(self, self.settings)
         self.recipe_table_proxy_model.setSourceModel(self.recipe_table_model)
-        # Connect each tech slider to the proxy model filter
-        for specialization, tech_widget in self.toolbox.tech_widgets.items():
-            tech_widget.slider.valueChanged.connect(
-                lambda value, spec=specialization, value_modifier=self.toolbox.tech_filter_all_widget.value(): self.recipe_table_proxy_model.set_tech_level_filter(
-                    spec, value + value_modifier
-                )
-            )
-        # Connect "All" tech slider to all specialization sliders
+        self.toolbox.techSliderChanged.connect(self.handle_tech_slider_change)
         self.toolbox.tech_filter_all_widget.slider.valueChanged.connect(
-            lambda value, widgets=self.toolbox.tech_widgets: self.recipe_table_proxy_model.set_tech_level_filters(
-                list(widgets.keys()),
-                [
-                    value + tech_widget.slider.value()
-                    for tech_widget in widgets.values()
-                ],
-            )
+            self.handle_all_tech_slider_change
         )
-        # Set initial tech level filters from settings
-        for specialization, max_level in settings.tech_level_filters.items():
-            self.recipe_table_proxy_model.set_tech_level_filter(
-                specialization, max_level
-            )
         self.recipe_table_view.setModel(self.recipe_table_proxy_model)
 
         splitter.addWidget(self.recipe_table_view)
@@ -688,29 +649,31 @@ class RecipeWindow(QWidget):
 
         self.recipe_table_view.recipe_clicked.connect(self.plot.plot_recipe)
 
-        self.recipe_worker = RecipeWorker(
-            get_gamedata().recipes, settings.tech_level_maximums
-        )
+        # Connect signals from recipe worker
         self.recipe_worker.tech_level_change_signal.connect(
             self.toolbox.handle_tech_level_change
         )
-
-        self.recipe_worker_thread = QThread(self)
-        self.recipe_worker_thread.setObjectName("RecipeWorkerThread")
-        self.recipe_worker.moveToThread(self.recipe_worker_thread)
-        self.recipe_worker_thread.started.connect(self.recipe_worker.run)
-        self.recipe_worker.finished.connect(self.recipe_worker.deleteLater)
-        self.recipe_worker_thread.finished.connect(
-            self.recipe_worker_thread.deleteLater
-        )
-
         self.recipe_worker.recipe_added_signal.connect(self.handle_recipe_added)
         self.recipe_worker.exchange_updated_signal.connect(
             self.handle_exchange_updated
         )
 
-        self.recipe_worker_thread.start()
+    # Called from toolbox when a tech slider is changed
+    @Slot(BuildingSpecialization, int)
+    def handle_tech_slider_change(
+        self, specialization: BuildingSpecialization, max_tech_level: int
+    ) -> None:
+        self.recipe_table_proxy_model.beginFilterChange()
+        self.settings.set_tech_level_filter(specialization, max_tech_level)
+        self.recipe_table_proxy_model.endFilterChange()
 
+    @Slot(int)
+    def handle_all_tech_slider_change(self, value: int) -> None:
+        self.recipe_table_proxy_model.beginFilterChange()
+        self.recipe_table_proxy_model.tech_level_modifier = value
+        self.recipe_table_proxy_model.endFilterChange()
+
+    # Called from recipe worker when a new recipe is added
     @Slot(Recipe)
     def handle_recipe_added(self, recipe: Recipe) -> None:
         building = get_building(recipe.producedIn)
@@ -738,6 +701,7 @@ class RecipeWindow(QWidget):
             recipe, profit_per_hour, consumable_preferred_combination
         )
 
+    # Called from recipe worker when exchange listings are updated
     @Slot(dict)
     def handle_exchange_updated(self) -> None:
         """
@@ -758,31 +722,10 @@ class RecipeWindow(QWidget):
             self.recipe_table_model.setData(self.recipe_table_model.index(row, 3), ", ".join(sorted(get_item_name(mat_id) for mat_id in consumable_preferred_combination)), Qt.ItemDataRole.EditRole)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        _logger.debug("Closing RecipeWindow, stopping worker thread.")
-        self.recipe_worker_thread.requestInterruption()
-        self.recipe_worker.wake_up()
-        self.recipe_worker_thread.quit()
-        if self.recipe_worker_thread.wait(5000):
-            _logger.debug("Worker thread has stopped successfully.")
-        else:
-            _logger.debug("Worker thread did not stop in time.")
-
         _logger.debug("Saving settings.")
-        settings = Settings()
-        settings.tech_level_filters = self.recipe_table_proxy_model.tech_level_filters
-        settings.tech_level_maximums = self.toolbox.get_tech_level_maximums()
-        cache_path = Path(CACHE_DIR) / CACHE_FILENAME
-        Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
-        try:
-            with cache_path.open("wb") as f:
-                pickle.dump(settings, f)
-            _logger.debug(f"Settings saved to {cache_path}.")
-        except IOError as e:
-            _logger.error(f"Error saving settings to {cache_path}: {e}")
-            raise
-        except Exception as e:
-            _logger.error(f"Unexpected error saving settings: {e}")
-            raise
+        # TODO: Put this in galaxyTycoonUi.py
+        self.settings.tech_level_filters = self.recipe_table_proxy_model.tech_level_filters
+        self.settings.tech_level_maximums = self.toolbox.get_tech_level_maximums()
 
 
 def calculate_profit_and_consumables(recipe: Recipe) -> None | tuple[float, tuple[int, ...]]:
