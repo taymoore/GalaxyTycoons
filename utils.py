@@ -5,6 +5,7 @@ import itertools
 
 from api.gameData import get_gamedata, get_building, get_worker, get_item_name, get_worker_housing
 from api.exchange import Exchange
+from api.models.gameData import WorkerType
 
 _logger = logging.getLogger(__name__)
 
@@ -62,8 +63,8 @@ def calculate_profit_and_consumables(recipe):
         recipe: The recipe for which to calculate the profit and consumables.
 
     Returns:
-        None | tuple[float, tuple[int, ...]]:
-            Returns a tuple containing the profit per hour and a tuple of consumable IDs
+        None | tuple[float, tuple[int, ...], tuple[int, ...]]:
+            Returns a tuple containing the profit per hour, a tuple of preferred consumable IDs, and a tuple of rejected consumable IDs
             if the calculation is successful. Returns None if the calculation cannot be performed.
     """
     try:
@@ -172,6 +173,9 @@ def calculate_profit_and_consumables(recipe):
                 f"No valid consumable combination found for recipe {get_item_name(recipe.output.id)} ({recipe.id}). This should not happen."
             )
             return None
+        consumable_rejected_combination = consumable_id_set.difference(
+            consumable_preferred_combination
+        )
 
         # Find building depreciation cost per hour
         building_depreciation_per_hour = 0.0
@@ -184,7 +188,7 @@ def calculate_profit_and_consumables(recipe):
                 return None
             building_depreciation_per_hour += (
                 material_listing.current_price  # in cents
-                * material.amount  # amount of material
+                * material.am  # amount of material
                 / (40 * 24)  # 40 days depreciation period
                 / 100  # convert cents to dollars
             )
@@ -193,7 +197,7 @@ def calculate_profit_and_consumables(recipe):
         ):
             if worker_count == 0:
                 continue
-            worker_housing_building = get_worker_housing(worker_type)
+            worker_housing_building = get_worker_housing(WorkerType(worker_type))
             for material in worker_housing_building.constructionMaterials:
                 material_listing = Exchange.get_listing(material.id)
                 if material_listing.current_price < 1:
@@ -203,13 +207,13 @@ def calculate_profit_and_consumables(recipe):
                     return None
                 building_depreciation_per_hour += (
                     material_listing.current_price  # in cents
-                    * material.amount  # amount of material
+                    * material.am  # amount of material
                     * (worker_count / worker_housing_building.workersHousing[worker_type - 1])  # scale by worker count
                     / (40 * 24)  # 40 days depreciation period
                     / 100  # convert cents to dollars
                 )
 
-        return optimal_profit_per_hour - building_depreciation_per_hour, consumable_preferred_combination
+        return optimal_profit_per_hour - building_depreciation_per_hour, consumable_preferred_combination, consumable_rejected_combination
     except Exception as e:
         _logger.error(f"Error calculating profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}): {e}")
         return None
@@ -248,7 +252,7 @@ def find_best_recipe_for_building(building_id: int, tech_level: int = float("inf
             if result is None:
                 continue
                 
-            profit, consumables = result
+            profit, consumables, _ = result
             if profit > best_profit:
                 best_profit = profit
                 best_recipe = recipe
