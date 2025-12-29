@@ -44,7 +44,7 @@ class MainWindow(QMainWindow):
         self.recipe_tab = RecipeWindow(self, self.recipe_worker, self.settings)
         self.planets_tab = PlanetsWindow(self)
         self.investments_tab = InvestmentsWindow(self)
-        self.configuration_tab = ConfigurationWindow(self, self.settings)
+        self.configuration_tab = ConfigurationWindow(self, self.settings, self.recipe_worker)
 
         # Start the recipe worker thread
         self.recipe_worker_thread.start()

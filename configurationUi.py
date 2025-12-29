@@ -495,9 +495,10 @@ class ConfigurationWindow(QWidget):
             # self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
             # self.sort(1, Qt.SortOrder.DescendingOrder)
 
-    def __init__(self, parent: QWidget | None = None, settings=None) -> None:
+    def __init__(self, parent: QWidget | None = None, settings=None, recipe_worker=None) -> None:
         super().__init__(parent)
         self.settings = settings
+        self.recipe_worker = recipe_worker
 
         # Main layout
         self.main_layout = QVBoxLayout()
@@ -533,6 +534,10 @@ class ConfigurationWindow(QWidget):
         self.configuration_tree_view.setColumnWidth(0, required_width)
         
         self.main_layout.addWidget(self.configuration_tree_view)
+        
+        # Connect to recipe worker's exchange update signal
+        if self.recipe_worker:
+            self.recipe_worker.exchange_updated_signal.connect(self.handle_exchange_updated)
     
     def _get_planet_names(self) -> List[str]:
         """Extract all planet names from gameData."""
@@ -548,3 +553,16 @@ class ConfigurationWindow(QWidget):
         """Extract all building names from gameData."""
         game_data = get_gamedata()
         return [building.name for building in game_data.buildings]
+    
+    @Slot()
+    def handle_exchange_updated(self) -> None:
+        """Recalculate all child rows when exchange listings are updated."""
+        for parent_row in range(self.configuration_tree_model.rowCount()):
+            parent_index = self.configuration_tree_model.index(parent_row, 0)
+            parent_item = self.configuration_tree_model.itemFromIndex(parent_index)
+            
+            if parent_item:
+                # Iterate through all child rows
+                for child_row in range(parent_item.rowCount()):
+                    child_index = parent_item.child(child_row, 0).index()
+                    self.configuration_tree_model._update_best_recipe(child_index)

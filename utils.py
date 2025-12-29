@@ -173,13 +173,29 @@ def calculate_profit_and_consumables(recipe):
             )
             return None
 
-        return optimal_profit_per_hour, consumable_preferred_combination
+        # Find building depreciation cost per hour
+        building_depreciation_per_hour = 0.0
+        for material in building.constructionMaterials:
+            material_listing = Exchange.get_listing(material.id)
+            if material_listing.current_price < 1:
+                _logger.error(
+                    f"Cannot calculate building depreciation for {building.name} ({building.id}) due to missing material price."
+                )
+                return None
+            building_depreciation_per_hour += (
+                material_listing.current_price  # in cents
+                * material.amount  # amount of material
+                / (40 * 24)  # 40 days depreciation period
+                / 100  # convert cents to dollars
+            )
+
+        return optimal_profit_per_hour - building_depreciation_per_hour, consumable_preferred_combination
     except Exception as e:
         _logger.error(f"Error calculating profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}): {e}")
         return None
 
 
-def find_best_recipe_for_building(building_id: int, tech_level: int):
+def find_best_recipe_for_building(building_id: int, tech_level: int = float("inf")) -> None | Tuple[str, float, str]:
     """
     Find the best recipe (highest profit/hr) for a given building and tech level.
     
