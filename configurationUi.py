@@ -218,6 +218,15 @@ class ConfigurationWindow(QWidget):
                         child_consumables_item.setEditable(False)
                         name_item.appendRow([child_name_item, child_level_item, child_recipe_item, child_profit_item, child_consumables_item])
                     
+                    # Recalculate profit for all loaded children
+                    for child_row in range(name_item.rowCount()):
+                        child_index = name_item.child(child_row, 0).index()
+                        if child_index.isValid():
+                            # Skip empty rows (no name)
+                            child_name = name_item.child(child_row, 0).text()
+                            if child_name:
+                                self._update_best_recipe(child_index)
+                    
                     # Add empty child row for display (non-editable)
                     self._add_empty_child_row(name_item)
             
