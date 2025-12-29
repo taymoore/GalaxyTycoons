@@ -39,7 +39,7 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
 from settings import Settings
-from utils import align_add
+from utils import align_add, calculate_profit_and_consumables
 from api.gameData import get_gamedata, get_item_name, get_building, get_worker
 from api.models.gameData import Recipe, BuildingSpecialization, Building, WorkerType
 from api.exchange import Exchange
@@ -47,6 +47,8 @@ from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
 
 _logger = logging.getLogger(__name__)
+
+
 
 class RecipeWindow(QWidget):
     class PriceGraph(pg.PlotWidget):

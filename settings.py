@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 import pickle
-from typing import Dict, List
+from typing import Dict, List, Any
 from PySide6.QtCore import QObject, Slot
 from pydantic import BaseModel, Field
 
@@ -16,6 +16,7 @@ class Settings(QObject):
     class SettingsData(BaseModel):
         tech_level_filters: Dict[BuildingSpecialization, int] = Field(default_factory=dict)
         tech_level_maximums: Dict[BuildingSpecialization, int] = Field(default_factory=dict)
+        configurations: List[Dict[str, Any]] = Field(default_factory=list)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,6 +37,14 @@ class Settings(QObject):
     @tech_level_maximums.setter
     def tech_level_maximums(self, value: Dict[BuildingSpecialization, int]):
         self._data.tech_level_maximums = value
+    
+    @property
+    def configurations(self) -> List[Dict[str, Any]]:
+        return self._data.configurations
+    
+    @configurations.setter
+    def configurations(self, value: List[Dict[str, Any]]):
+        self._data.configurations = value
 
     @Slot(BuildingSpecialization, int)
     def set_tech_level_filter(

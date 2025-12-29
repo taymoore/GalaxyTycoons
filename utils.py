@@ -1,5 +1,12 @@
 import pandas as pd
-from typing import Tuple, Union
+from typing import Tuple, Union, List
+import logging
+import itertools
+
+from api.gameData import get_gamedata, get_building, get_worker, get_item_name
+from api.exchange import Exchange
+
+_logger = logging.getLogger(__name__)
 
 
 def align_and_interpolate(
@@ -45,3 +52,181 @@ def align_add(
         for data in a.align(b, axis=0)
     ]
     return aligned_data[0].add(aligned_data[1], axis="index")
+
+
+def calculate_profit_and_consumables(recipe):
+    """
+    Calculate the profit per hour and the preferred consumable combination for a given recipe.
+
+    Args:
+        recipe: The recipe for which to calculate the profit and consumables.
+
+    Returns:
+        None | tuple[float, tuple[int, ...]]:
+            Returns a tuple containing the profit per hour and a tuple of consumable IDs
+            if the calculation is successful. Returns None if the calculation cannot be performed.
+    """
+    try:
+        building = get_building(recipe.producedIn)
+        listing = Exchange.get_listing(recipe.output.id)
+        base_profit_per_hour = listing.current_price * recipe.output.am / 100
+
+        for material_amount in recipe.inputs:
+            material_price = Exchange.get_listing(material_amount.id).current_price / 100
+            if material_price < 1:
+                return None
+            base_profit_per_hour -= material_price * material_amount.am
+
+        base_profit_per_hour = base_profit_per_hour / (recipe.timeMinutes / 60)
+
+        # Calculate worker cost
+        optimal_profit_per_hour = float("-inf")
+        # Get list of consumables
+        consumable_id_set: set[int] = set()
+        for worker_type, worker_count in enumerate(building.workersNeeded or [], start=1):
+            if worker_count == 0:
+                continue
+            worker = get_worker(worker_type)
+            consumable_id_set.update(
+                [consumable.matId for consumable in worker.consumables]
+            )
+        if len(consumable_id_set) == 0:
+            _logger.debug(
+                f"No workers needed for building {building.name} ({building.id})."
+            )
+        # Try all combinations of consumables to find lowest cost
+        consumable_preferred_combination = None
+        for combination_size in range(len(consumable_id_set or []) + 1):
+            for consumable_list in itertools.combinations(
+                consumable_id_set or [], combination_size
+            ):
+                worker_cost_per_hour = 0.0
+                worker_count_satisfaction_list: List[tuple[float, float]] = (
+                    []
+                )  # worker_count, worker_satisfaction
+                for worker_type, worker_count in enumerate(
+                    building.workersNeeded or [], start=1
+                ):
+                    if worker_count == 0:
+                        continue
+                    consumable_optional_missed_count = 0
+                    consumable_essential_missed_count = 0
+                    combination_valid = True
+                    worker = get_worker(worker_type)
+                    for consumable in worker.consumables:
+                        # If consumable is in this combination, calculate its cost
+                        if consumable.matId in consumable_list:
+                            consumable_listing = Exchange.get_listing(consumable.matId)
+                            if consumable_listing.current_price < 1:
+                                combination_valid = False
+                                break
+                            worker_cost_per_hour += (
+                                consumable_listing.current_price  # in cents
+                                * consumable.amount  # daily consumption per 1000 workers
+                                * worker_count  # number of workers
+                                / 24  # hours per day
+                                / 1000  # per 1000 workers
+                                / 100  # convert cents to dollars
+                            )
+                        # If consumable is not in this combination, apply satisfaction penalty
+                        else:
+                            if consumable.essential:
+                                consumable_essential_missed_count += 1
+                            else:
+                                consumable_optional_missed_count += 1
+                    if not combination_valid:
+                        break
+                    worker_type_satisfaction = 1.0
+                    worker_type_satisfaction -= 0.1 * consumable_optional_missed_count
+                    worker_type_satisfaction *= 0.6**consumable_essential_missed_count
+                    worker_type_satisfaction = max(worker_type_satisfaction, 0.1)
+                    worker_count_satisfaction_list.append(
+                        (worker_count, worker_type_satisfaction)
+                    )
+                total_worker_count = sum(
+                    worker_count for worker_count, _ in worker_count_satisfaction_list
+                )
+                total_worker_satisfaction = (
+                    sum(
+                        worker_count * worker_satisfaction / total_worker_count
+                        for worker_count, worker_satisfaction in worker_count_satisfaction_list
+                    )
+                    if total_worker_count > 0
+                    else 0.1
+                )
+                assert 0.0 < total_worker_satisfaction <= 1.0
+                configuration_profit_per_hour = (
+                    base_profit_per_hour * total_worker_satisfaction - worker_cost_per_hour
+                )
+                if configuration_profit_per_hour > optimal_profit_per_hour:
+                    optimal_profit_per_hour = configuration_profit_per_hour
+                    consumable_preferred_combination = consumable_list
+        if optimal_profit_per_hour == float("-inf"):
+            _logger.debug(
+                f"Could not calculate profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}). Base profit/hr: {base_profit_per_hour:,.2f}."
+            )
+            return None
+
+        if consumable_preferred_combination is None:
+            _logger.error(
+                f"No valid consumable combination found for recipe {get_item_name(recipe.output.id)} ({recipe.id}). This should not happen."
+            )
+            return None
+
+        return optimal_profit_per_hour, consumable_preferred_combination
+    except Exception as e:
+        _logger.error(f"Error calculating profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}): {e}")
+        return None
+
+
+def find_best_recipe_for_building(building_id: int, tech_level: int):
+    """
+    Find the best recipe (highest profit/hr) for a given building and tech level.
+    
+    Args:
+        building_id: ID of the building
+        tech_level: Technology level filter
+    
+    Returns:
+        None | tuple[str, float, str]: Recipe name, profit/hr, and consumables string
+    """
+    try:
+        game_data = get_gamedata()
+        building = get_building(building_id)
+        
+        best_recipe = None
+        best_profit = float("-inf")
+        best_consumables = None
+        
+        # Find all recipes for this building
+        for recipe in game_data.recipes:
+            if recipe.producedIn != building_id:
+                continue
+            if recipe.reqTech > tech_level:
+                continue
+            if len(recipe.inputs) == 0:
+                continue
+                
+            result = calculate_profit_and_consumables(recipe)
+            
+            if result is None:
+                continue
+                
+            profit, consumables = result
+            if profit > best_profit:
+                best_profit = profit
+                best_recipe = recipe
+                best_consumables = consumables
+        
+        if best_recipe is None:
+            return None
+            
+        # Format consumables as string
+        consumables_str = ", ".join(
+            get_item_name(c_id) for c_id in best_consumables
+        ) if best_consumables else "None"
+        
+        return get_item_name(best_recipe.output.id), best_profit, consumables_str
+    except Exception as e:
+        _logger.error(f"Error finding best recipe for building {building_id}: {e}")
+        return None
