@@ -48,7 +48,7 @@ import pyqtgraph as pg
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
-from utils import align_add, find_best_recipe_for_building
+from utils import align_add, find_best_recipe_for_building, ConsumablesDelegate, format_consumables
 from api.gameData import get_gamedata, get_item_name, get_building, get_worker
 from api.models.gameData import Recipe, BuildingSpecialization, Building, WorkerType
 from api.exchange import Exchange
@@ -56,71 +56,6 @@ from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
 
 _logger = logging.getLogger(__name__)
-
-
-class ConsumablesDelegate(QStyledItemDelegate):
-    """Custom delegate that renders consumables with rejected items (in parentheses) in red."""
-    
-    def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
-        """Paint the cell with mixed-color text rendering."""
-        text = index.data(Qt.ItemDataRole.DisplayRole)
-        if not text:
-            return super().paint(painter, option, index)
-        
-        # Let Qt draw the background (selection, hover, alternating rows, etc.)
-        from PySide6.QtWidgets import QStyle
-        self.initStyleOption(option, index)
-        # Clear the text so drawControl only draws background, not text
-        option.text = ""
-        style = option.widget.style() if option.widget else QStyle()
-        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
-        
-        painter.save()
-        
-        # Enable text anti-aliasing for smooth rendering
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        
-        # Use the option's font to match tree view rendering
-        font = option.font
-        
-        # Parse text to find parenthesized sections
-        layout = QTextLayout(text, font)
-        layout.setTextOption(QTextOption(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
-        
-        # Create formats for red text (parenthesized sections)
-        format_ranges = []
-        in_parens = False
-        paren_start = -1
-        
-        for i, char in enumerate(text):
-            if char == '(':
-                in_parens = True
-                paren_start = i
-            elif char == ')' and in_parens:
-                # Add format for the parenthesized section (including parentheses)
-                fmt = QTextCharFormat()
-                fmt.setForeground(QColor(255, 0, 0))  # Red
-                layout_format = QTextLayout.FormatRange()
-                layout_format.start = paren_start
-                layout_format.length = i - paren_start + 1
-                layout_format.format = fmt
-                format_ranges.append(layout_format)
-                in_parens = False
-        
-        # Apply formats before layout
-        layout.setFormats(format_ranges)
-        
-        # Create the layout
-        layout.beginLayout()
-        line = layout.createLine()
-        layout.endLayout()
-        
-        # Position and draw the layout
-        painter.translate(option.rect.left() + 2, option.rect.top())
-        layout.draw(painter, QPointF(0, (option.rect.height() - layout.boundingRect().height()) / 2))
-        
-        painter.restore()
 
 
 class PlanetNameDelegate(QStyledItemDelegate):
@@ -375,19 +310,7 @@ class ConfigurationWindow(QWidget):
                 
                 recipe_name, profit, consumables_preferred, consumables_rejected = result
                 
-                # Format consumables text
-                parts = []
-                if consumables_preferred:
-                    preferred_names = sorted(get_item_name(c_id) for c_id in consumables_preferred)
-                    parts.append(", ".join(preferred_names))
-                if consumables_rejected:
-                    rejected_names = sorted(get_item_name(c_id) for c_id in consumables_rejected)
-                    if parts:  # If we have preferred, show rejected in parentheses
-                        parts.append(f"({', '.join(rejected_names)})")
-                    else:  # Only rejected
-                        parts.append(f"({', '.join(rejected_names)})")
-                
-                consumables_text = " ".join(parts) if parts else "None"
+                consumables_text = format_consumables(consumables_preferred, consumables_rejected)
                 
                 # Update the items
                 recipe_item = self.itemFromIndex(child_row_index.siblingAtColumn(2))

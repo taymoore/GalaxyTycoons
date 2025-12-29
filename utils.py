@@ -1,4 +1,7 @@
 from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, QModelIndex, QPointF
+from PySide6.QtWidgets import QStyledItemDelegate, QStyle
+from PySide6.QtGui import QPainter, QTextLayout, QTextCharFormat, QTextOption
 import pandas as pd
 from typing import Tuple, Union, List
 import logging
@@ -9,6 +12,70 @@ from api.exchange import Exchange
 from api.models.gameData import WorkerType
 
 _logger = logging.getLogger(__name__)
+
+
+class ConsumablesDelegate(QStyledItemDelegate):
+    """Custom delegate that renders consumables with rejected items (in parentheses) in red."""
+    
+    def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
+        """Paint the cell with mixed-color text rendering."""
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        if not text:
+            return super().paint(painter, option, index)
+        
+        # Let Qt draw the background (selection, hover, alternating rows, etc.)
+        self.initStyleOption(option, index)
+        # Clear the text so drawControl only draws background, not text
+        option.text = ""
+        style = option.widget.style() if option.widget else QStyle()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
+        
+        painter.save()
+        
+        # Enable text anti-aliasing for smooth rendering
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        
+        # Use the option's font to match rendering
+        font = option.font
+        
+        # Parse text to find parenthesized sections
+        layout = QTextLayout(text, font)
+        layout.setTextOption(QTextOption(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
+        
+        # Create formats for red text (parenthesized sections)
+        format_ranges = []
+        in_parens = False
+        paren_start = -1
+        
+        for i, char in enumerate(text):
+            if char == '(':
+                in_parens = True
+                paren_start = i
+            elif char == ')' and in_parens:
+                # Add format for the parenthesized section (including parentheses)
+                fmt = QTextCharFormat()
+                fmt.setForeground(QColor(255, 0, 0))  # Red
+                layout_format = QTextLayout.FormatRange()
+                layout_format.start = paren_start
+                layout_format.length = i - paren_start + 1
+                layout_format.format = fmt
+                format_ranges.append(layout_format)
+                in_parens = False
+        
+        # Apply formats before layout
+        layout.setFormats(format_ranges)
+        
+        # Create the layout
+        layout.beginLayout()
+        line = layout.createLine()
+        layout.endLayout()
+        
+        # Position and draw the layout
+        painter.translate(option.rect.left() + 2, option.rect.top())
+        layout.draw(painter, QPointF(0, (option.rect.height() - layout.boundingRect().height()) / 2))
+        
+        painter.restore()
 
 
 def align_and_interpolate(
@@ -220,17 +287,16 @@ def calculate_profit_and_consumables(recipe):
         return None
 
 
-def format_consumables_with_colors(preferred: tuple[int, ...], rejected: tuple[int, ...]) -> tuple[str, QColor]:
+def format_consumables(preferred: tuple[int, ...], rejected: tuple[int, ...]) -> str:
     """
-    Format consumables and return the text with appropriate color.
-    Preferred consumables are shown first, rejected in parentheses.
+    Format consumables text with preferred items first and rejected items in parentheses.
     
     Args:
         preferred: Tuple of preferred consumable IDs
         rejected: Tuple of rejected consumable IDs
     
     Returns:
-        tuple[str, QColor]: Formatted text and color to use
+        str: Formatted consumables text (e.g., "Item1, Item2 (Item3, Item4)")
     """
     parts = []
     
@@ -240,47 +306,9 @@ def format_consumables_with_colors(preferred: tuple[int, ...], rejected: tuple[i
     
     if rejected:
         rejected_names = sorted(get_item_name(c_id) for c_id in rejected)
-        if parts:  # If we have preferred, show rejected in parentheses
-            parts.append(f"({', '.join(rejected_names)})")
-            color = QColor(128, 0, 0)  # Dark red for mixed
-        else:  # Only rejected
-            parts.append(", ".join(rejected_names))
-            color = QColor(255, 0, 0)  # Bright red for rejected only
-    else:
-        color = QColor(0, 0, 0)  # Black for preferred only
+        parts.append(f"({', '.join(rejected_names)})")
     
-    if not parts:
-        return "None", QColor(0, 0, 0)
-    
-    return " ".join(parts), color
-
-
-def format_consumables_html(preferred: tuple[int, ...], rejected: tuple[int, ...]) -> str:
-    """
-    Format consumables with preferred in black and rejected in red using HTML.
-    
-    Args:
-        preferred: Tuple of preferred consumable IDs
-        rejected: Tuple of rejected consumable IDs
-    
-    Returns:
-        str: HTML-formatted string with consumables
-    """
-    parts = []
-    
-    if preferred:
-        preferred_names = sorted(get_item_name(c_id) for c_id in preferred)
-        parts.append(", ".join(preferred_names))
-    
-    if rejected:
-        rejected_names = sorted(get_item_name(c_id) for c_id in rejected)
-        red_text = '<span style="color: red;">' + ", ".join(rejected_names) + '</span>'
-        parts.append(red_text)
-    
-    if not parts:
-        return "None"
-    
-    return ", ".join(parts)
+    return " ".join(parts) if parts else "None"
 
 
 def find_best_recipe_for_building(building_id: int, tech_level: int = float("inf")) -> None | Tuple[str, float, tuple[int, ...], tuple[int, ...]]:
