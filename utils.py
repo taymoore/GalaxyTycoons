@@ -3,7 +3,7 @@ from typing import Tuple, Union, List
 import logging
 import itertools
 
-from api.gameData import get_gamedata, get_building, get_worker, get_item_name
+from api.gameData import get_gamedata, get_building, get_worker, get_item_name, get_worker_housing
 from api.exchange import Exchange
 
 _logger = logging.getLogger(__name__)
@@ -188,6 +188,26 @@ def calculate_profit_and_consumables(recipe):
                 / (40 * 24)  # 40 days depreciation period
                 / 100  # convert cents to dollars
             )
+        for worker_type, worker_count in enumerate(
+            building.workersNeeded or [], start=1
+        ):
+            if worker_count == 0:
+                continue
+            worker_housing_building = get_worker_housing(worker_type)
+            for material in worker_housing_building.constructionMaterials:
+                material_listing = Exchange.get_listing(material.id)
+                if material_listing.current_price < 1:
+                    _logger.error(
+                        f"Cannot calculate worker housing depreciation for {building.name} ({building.id}) due to missing material price."
+                    )
+                    return None
+                building_depreciation_per_hour += (
+                    material_listing.current_price  # in cents
+                    * material.amount  # amount of material
+                    * (worker_count / worker_housing_building.workersHousing[worker_type - 1])  # scale by worker count
+                    / (40 * 24)  # 40 days depreciation period
+                    / 100  # convert cents to dollars
+                )
 
         return optimal_profit_per_hour - building_depreciation_per_hour, consumable_preferred_combination
     except Exception as e:
