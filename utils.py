@@ -1,3 +1,4 @@
+from PySide6.QtGui import QColor
 import pandas as pd
 from typing import Tuple, Union, List
 import logging
@@ -219,7 +220,70 @@ def calculate_profit_and_consumables(recipe):
         return None
 
 
-def find_best_recipe_for_building(building_id: int, tech_level: int = float("inf")) -> None | Tuple[str, float, str]:
+def format_consumables_with_colors(preferred: tuple[int, ...], rejected: tuple[int, ...]) -> tuple[str, QColor]:
+    """
+    Format consumables and return the text with appropriate color.
+    Preferred consumables are shown first, rejected in parentheses.
+    
+    Args:
+        preferred: Tuple of preferred consumable IDs
+        rejected: Tuple of rejected consumable IDs
+    
+    Returns:
+        tuple[str, QColor]: Formatted text and color to use
+    """
+    parts = []
+    
+    if preferred:
+        preferred_names = sorted(get_item_name(c_id) for c_id in preferred)
+        parts.append(", ".join(preferred_names))
+    
+    if rejected:
+        rejected_names = sorted(get_item_name(c_id) for c_id in rejected)
+        if parts:  # If we have preferred, show rejected in parentheses
+            parts.append(f"({', '.join(rejected_names)})")
+            color = QColor(128, 0, 0)  # Dark red for mixed
+        else:  # Only rejected
+            parts.append(", ".join(rejected_names))
+            color = QColor(255, 0, 0)  # Bright red for rejected only
+    else:
+        color = QColor(0, 0, 0)  # Black for preferred only
+    
+    if not parts:
+        return "None", QColor(0, 0, 0)
+    
+    return " ".join(parts), color
+
+
+def format_consumables_html(preferred: tuple[int, ...], rejected: tuple[int, ...]) -> str:
+    """
+    Format consumables with preferred in black and rejected in red using HTML.
+    
+    Args:
+        preferred: Tuple of preferred consumable IDs
+        rejected: Tuple of rejected consumable IDs
+    
+    Returns:
+        str: HTML-formatted string with consumables
+    """
+    parts = []
+    
+    if preferred:
+        preferred_names = sorted(get_item_name(c_id) for c_id in preferred)
+        parts.append(", ".join(preferred_names))
+    
+    if rejected:
+        rejected_names = sorted(get_item_name(c_id) for c_id in rejected)
+        red_text = '<span style="color: red;">' + ", ".join(rejected_names) + '</span>'
+        parts.append(red_text)
+    
+    if not parts:
+        return "None"
+    
+    return ", ".join(parts)
+
+
+def find_best_recipe_for_building(building_id: int, tech_level: int = float("inf")) -> None | Tuple[str, float, tuple[int, ...], tuple[int, ...]]:
     """
     Find the best recipe (highest profit/hr) for a given building and tech level.
     
@@ -228,7 +292,7 @@ def find_best_recipe_for_building(building_id: int, tech_level: int = float("inf
         tech_level: Technology level filter
     
     Returns:
-        None | tuple[str, float, str]: Recipe name, profit/hr, and consumables string
+        None | tuple[str, float, tuple[int, ...], tuple[int, ...]]: Recipe name, profit/hr, preferred consumables, and rejected consumables
     """
     try:
         game_data = get_gamedata()
@@ -236,7 +300,8 @@ def find_best_recipe_for_building(building_id: int, tech_level: int = float("inf
         
         best_recipe = None
         best_profit = float("-inf")
-        best_consumables = None
+        best_preferred = None
+        best_rejected = None
         
         # Find all recipes for this building
         for recipe in game_data.recipes:
@@ -252,21 +317,17 @@ def find_best_recipe_for_building(building_id: int, tech_level: int = float("inf
             if result is None:
                 continue
                 
-            profit, consumables, _ = result
+            profit, preferred, rejected = result
             if profit > best_profit:
                 best_profit = profit
                 best_recipe = recipe
-                best_consumables = consumables
+                best_preferred = preferred
+                best_rejected = rejected
         
         if best_recipe is None:
             return None
-            
-        # Format consumables as string
-        consumables_str = ", ".join(
-            get_item_name(c_id) for c_id in best_consumables
-        ) if best_consumables else "None"
         
-        return get_item_name(best_recipe.output.id), best_profit, consumables_str
+        return get_item_name(best_recipe.output.id), best_profit, best_preferred, best_rejected
     except Exception as e:
         _logger.error(f"Error finding best recipe for building {building_id}: {e}")
         return None

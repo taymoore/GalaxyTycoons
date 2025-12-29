@@ -32,8 +32,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QCheckBox,
     QSplitter,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
 )
-from PySide6.QtGui import QCloseEvent, QWheelEvent
+from PySide6.QtGui import QCloseEvent, QWheelEvent, QColor, QBrush
 import pyqtgraph as pg
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
@@ -47,7 +49,6 @@ from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
 
 _logger = logging.getLogger(__name__)
-
 
 
 class RecipeWindow(QWidget):
@@ -281,6 +282,7 @@ class RecipeWindow(QWidget):
         def __init__(self, parent: QObject):
             super().__init__(parent)
             self.table_data: List[List[str]] = []
+            self.consumables_data: List[tuple[tuple[int, ...], tuple[int, ...]]] = []  # Store (preferred, rejected) tuples
             self.recipes: List[Recipe] = []
             self.header_data: List[str] = [
                 "Recipe Output",
@@ -322,12 +324,24 @@ class RecipeWindow(QWidget):
                 return data
             elif role == Qt.ItemDataRole.UserRole:
                 return data
+            elif role == Qt.ItemDataRole.ForegroundRole:
+                # Return color for consumables column
+                if column == 3:  # Consumables column
+                    preferred, rejected = self.consumables_data[row]
+                    if rejected and preferred:
+                        return QBrush(QColor(128, 0, 0))  # Dark red for mixed
+                    elif rejected:
+                        return QBrush(QColor(255, 0, 0))  # Bright red for rejected only
+                    else:
+                        return QBrush(QColor(0, 0, 0))  # Black for preferred only
+            return None
 
         def add_row(
             self,
             recipe: Recipe,
             profit_per_hour: float,
-            consumable_list: tuple[int, ...],
+            consumable_preferred: tuple[int, ...],
+            consumable_rejected: tuple[int, ...],
         ) -> None:
             row = []
             row.append(get_item_name(recipe.output.id))
@@ -335,11 +349,23 @@ class RecipeWindow(QWidget):
             row.append(
                 f"{get_building(recipe.producedIn).specialization.name} {recipe.reqTech}"
             )
-            row.append(
-                ", ".join(sorted(get_item_name(mat_id) for mat_id in consumable_list))
-            )
+            
+            # Format consumables text
+            parts = []
+            if consumable_preferred:
+                preferred_names = sorted(get_item_name(c_id) for c_id in consumable_preferred)
+                parts.append(", ".join(preferred_names))
+            if consumable_rejected:
+                rejected_names = sorted(get_item_name(c_id) for c_id in consumable_rejected)
+                if parts:  # If we have preferred, show rejected in parentheses
+                    parts.append(f"({', '.join(rejected_names)})")
+                else:  # Only rejected
+                    parts.append(", ".join(rejected_names))
+            
+            row.append(" ".join(parts) if parts else "None")
 
             self.recipes.append(recipe)
+            self.consumables_data.append((consumable_preferred, consumable_rejected))
             self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
             self.table_data.append(row)
             self.endInsertRows()
@@ -358,6 +384,27 @@ class RecipeWindow(QWidget):
                 self.dataChanged.emit(index, index)
                 return True
             return False
+        
+        def update_consumables(self, row: int, consumable_preferred: tuple[int, ...], consumable_rejected: tuple[int, ...]) -> None:
+            """Update consumables data and text for a specific row."""
+            # Format consumables text
+            parts = []
+            if consumable_preferred:
+                preferred_names = sorted(get_item_name(c_id) for c_id in consumable_preferred)
+                parts.append(", ".join(preferred_names))
+            if consumable_rejected:
+                rejected_names = sorted(get_item_name(c_id) for c_id in consumable_rejected)
+                if parts:  # If we have preferred, show rejected in parentheses
+                    parts.append(f"({', '.join(rejected_names)})")
+                else:  # Only rejected
+                    parts.append(", ".join(rejected_names))
+            
+            self.table_data[row][3] = " ".join(parts) if parts else "None"
+            self.consumables_data[row] = (consumable_preferred, consumable_rejected)
+            
+            # Emit dataChanged for the consumables column
+            consumables_index = self.index(row, 3)
+            self.dataChanged.emit(consumables_index, consumables_index)
 
 
     class RecipeTableView(QTableView):
@@ -634,6 +681,7 @@ class RecipeWindow(QWidget):
         self.recipe_table_view = RecipeWindow.RecipeTableView(self)
         self.recipe_table_proxy_model = RecipeWindow.RecipeTableProxyModel(self, self.settings)
         self.recipe_table_proxy_model.setSourceModel(self.recipe_table_model)
+        
         self.toolbox.techSliderChanged.connect(self.handle_tech_slider_change)
         self.toolbox.tech_filter_all_widget.slider.valueChanged.connect(
             self.handle_all_tech_slider_change
@@ -685,8 +733,9 @@ class RecipeWindow(QWidget):
         if result is None:
             profit_per_hour = float("-inf")
             consumable_preferred_combination = ()
+            consumable_rejected_combination = ()
         else:
-            profit_per_hour, consumable_preferred_combination, _ = result
+            profit_per_hour, consumable_preferred_combination, consumable_rejected_combination = result
 
         # Add building filter
         checkbox = self.toolbox.add_building_filter(building)
@@ -700,7 +749,7 @@ class RecipeWindow(QWidget):
 
         # Update recipe table
         self.recipe_table_model.add_row(
-            recipe, profit_per_hour, consumable_preferred_combination
+            recipe, profit_per_hour, consumable_preferred_combination, consumable_rejected_combination
         )
 
     # Called from recipe worker when exchange listings are updated
@@ -717,11 +766,12 @@ class RecipeWindow(QWidget):
             if result is None:
                 profit_per_hour = float("-inf")
                 consumable_preferred_combination = ()
+                consumable_rejected_combination = ()
             else:
-                profit_per_hour, consumable_preferred_combination, _ = result
+                profit_per_hour, consumable_preferred_combination, consumable_rejected_combination = result
 
             self.recipe_table_model.setData(self.recipe_table_model.index(row, 1), profit_per_hour, Qt.ItemDataRole.EditRole)
-            self.recipe_table_model.setData(self.recipe_table_model.index(row, 3), ", ".join(sorted(get_item_name(mat_id) for mat_id in consumable_preferred_combination)), Qt.ItemDataRole.EditRole)
+            self.recipe_table_model.update_consumables(row, consumable_preferred_combination, consumable_rejected_combination)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         _logger.debug("Saving settings.")
