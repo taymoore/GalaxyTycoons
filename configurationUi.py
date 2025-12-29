@@ -42,7 +42,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QMenu,
 )
-from PySide6.QtGui import QCloseEvent, QWheelEvent, QPixmap, QColor, QBrush
+from PySide6.QtGui import QCloseEvent, QWheelEvent, QPixmap, QColor, QBrush, QPalette, QTextLayout, QTextCharFormat, QPainter, QTextOption
+from PySide6.QtCore import QPointF
 import pyqtgraph as pg
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
@@ -55,6 +56,71 @@ from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
 
 _logger = logging.getLogger(__name__)
+
+
+class ConsumablesDelegate(QStyledItemDelegate):
+    """Custom delegate that renders consumables with rejected items (in parentheses) in red."""
+    
+    def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
+        """Paint the cell with mixed-color text rendering."""
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        if not text:
+            return super().paint(painter, option, index)
+        
+        # Let Qt draw the background (selection, hover, alternating rows, etc.)
+        from PySide6.QtWidgets import QStyle
+        self.initStyleOption(option, index)
+        # Clear the text so drawControl only draws background, not text
+        option.text = ""
+        style = option.widget.style() if option.widget else QStyle()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
+        
+        painter.save()
+        
+        # Enable text anti-aliasing for smooth rendering
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        
+        # Use the option's font to match tree view rendering
+        font = option.font
+        
+        # Parse text to find parenthesized sections
+        layout = QTextLayout(text, font)
+        layout.setTextOption(QTextOption(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
+        
+        # Create formats for red text (parenthesized sections)
+        format_ranges = []
+        in_parens = False
+        paren_start = -1
+        
+        for i, char in enumerate(text):
+            if char == '(':
+                in_parens = True
+                paren_start = i
+            elif char == ')' and in_parens:
+                # Add format for the parenthesized section (including parentheses)
+                fmt = QTextCharFormat()
+                fmt.setForeground(QColor(255, 0, 0))  # Red
+                layout_format = QTextLayout.FormatRange()
+                layout_format.start = paren_start
+                layout_format.length = i - paren_start + 1
+                layout_format.format = fmt
+                format_ranges.append(layout_format)
+                in_parens = False
+        
+        # Apply formats before layout
+        layout.setFormats(format_ranges)
+        
+        # Create the layout
+        layout.beginLayout()
+        line = layout.createLine()
+        layout.endLayout()
+        
+        # Position and draw the layout
+        painter.translate(option.rect.left() + 2, option.rect.top())
+        layout.draw(painter, QPointF(0, (option.rect.height() - layout.boundingRect().height()) / 2))
+        
+        painter.restore()
 
 
 class PlanetNameDelegate(QStyledItemDelegate):
@@ -309,16 +375,19 @@ class ConfigurationWindow(QWidget):
                 
                 recipe_name, profit, consumables_preferred, consumables_rejected = result
                 
-                # Format consumables with colors
-                consumables_parts = []
+                # Format consumables text
+                parts = []
                 if consumables_preferred:
                     preferred_names = sorted(get_item_name(c_id) for c_id in consumables_preferred)
-                    consumables_parts.extend(preferred_names)
+                    parts.append(", ".join(preferred_names))
                 if consumables_rejected:
                     rejected_names = sorted(get_item_name(c_id) for c_id in consumables_rejected)
-                    consumables_parts.extend(rejected_names)
+                    if parts:  # If we have preferred, show rejected in parentheses
+                        parts.append(f"({', '.join(rejected_names)})")
+                    else:  # Only rejected
+                        parts.append(f"({', '.join(rejected_names)})")
                 
-                consumables_text = ", ".join(consumables_parts) if consumables_parts else "None"
+                consumables_text = " ".join(parts) if parts else "None"
                 
                 # Update the items
                 recipe_item = self.itemFromIndex(child_row_index.siblingAtColumn(2))
@@ -331,27 +400,18 @@ class ConfigurationWindow(QWidget):
                     profit_item.setText(f"{profit:,.2f}")
                 if consumables_item:
                     consumables_item.setText(consumables_text)
-                    # Set foreground color to indicate rejected consumables in red
-                    # Only color if there are rejected consumables
-                    if consumables_rejected:
-                        # Create a mixed-color effect by using gray for the whole text
-                        # Better approach: show tooltip with breakdown
-                        consumables_item.setToolTip(
-                            f"Preferred: {', '.join(sorted(get_item_name(c_id) for c_id in consumables_preferred)) if consumables_preferred else 'None'}\n"
-                            f"Rejected: {', '.join(sorted(get_item_name(c_id) for c_id in consumables_rejected))}"
-                        )
-                        # Set text to show distinction
-                        if consumables_preferred and consumables_rejected:
-                            preferred_text = ", ".join(sorted(get_item_name(c_id) for c_id in consumables_preferred))
-                            rejected_text = ", ".join(sorted(get_item_name(c_id) for c_id in consumables_rejected))
-                            consumables_item.setText(f"{preferred_text} ({rejected_text})")
-                            consumables_item.setForeground(QBrush(QColor(128, 0, 0)))  # Dark red for mixed
-                        else:
-                            consumables_item.setForeground(QBrush(QColor(255, 0, 0)))  # Red for rejected only
-                    else:
-                        consumables_item.setForeground(QBrush(QColor(0, 0, 0)))  # Black for preferred only
+                    # Set tooltip
+                    if consumables_rejected or consumables_preferred:
+                        tooltip_parts = []
                         if consumables_preferred:
-                            consumables_item.setToolTip(f"Preferred: {consumables_text}")
+                            tooltip_parts.append(f"Preferred: {', '.join(sorted(get_item_name(c_id) for c_id in consumables_preferred))}")
+                        if consumables_rejected:
+                            tooltip_parts.append(f"Rejected: {', '.join(sorted(get_item_name(c_id) for c_id in consumables_rejected))}")
+                        consumables_item.setToolTip("\n".join(tooltip_parts))
+                    else:
+                        consumables_item.setToolTip("")
+                    # Reset foreground color to default (delegate handles coloring)
+                    consumables_item.setForeground(QBrush())
                     
             except Exception as e:
                 _logger.error(f"Error updating best recipe: {e}")
@@ -552,6 +612,10 @@ class ConfigurationWindow(QWidget):
         # Set custom delegate for Level column (integers > 0)
         level_delegate = IntegerDelegate(self)
         self.configuration_tree_view.setItemDelegateForColumn(1, level_delegate)
+        
+        # Set custom delegate for Consumables column (mixed-color text)
+        consumables_delegate = ConsumablesDelegate(self)
+        self.configuration_tree_view.setItemDelegateForColumn(4, consumables_delegate)
         
         # Calculate and set minimum width for Name column based on contents
         font_metrics = self.fontMetrics()

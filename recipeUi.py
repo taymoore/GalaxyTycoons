@@ -17,6 +17,7 @@ from PySide6.QtCore import (
     QObject,
     QModelIndex,
     QPersistentModelIndex,
+    QPointF,
 )
 from PySide6.QtWidgets import (
     QHeaderView,
@@ -34,8 +35,9 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QStyle,
 )
-from PySide6.QtGui import QCloseEvent, QWheelEvent, QColor, QBrush
+from PySide6.QtGui import QCloseEvent, QWheelEvent, QColor, QBrush, QPalette, QTextLayout, QTextCharFormat, QPainter, QTextOption
 import pyqtgraph as pg
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
@@ -49,6 +51,70 @@ from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
 
 _logger = logging.getLogger(__name__)
+
+
+class ConsumablesDelegate(QStyledItemDelegate):
+    """Custom delegate that renders consumables with rejected items (in parentheses) in red."""
+    
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        """Paint the cell with mixed-color text rendering."""
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        if not text:
+            return super().paint(painter, option, index)
+        
+        # Let Qt draw the background (selection, hover, etc.)
+        self.initStyleOption(option, index)
+        # Clear the text so drawControl only draws background, not text
+        option.text = ""
+        style = option.widget.style() if option.widget else QStyle()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
+        
+        painter.save()
+        
+        # Enable text anti-aliasing for smooth rendering
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        
+        # Use the option's font to match table rendering
+        font = option.font
+        
+        # Parse text to find parenthesized sections
+        layout = QTextLayout(text, font)
+        layout.setTextOption(QTextOption(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
+        
+        # Create formats for red text (parenthesized sections)
+        format_ranges = []
+        in_parens = False
+        paren_start = -1
+        
+        for i, char in enumerate(text):
+            if char == '(':
+                in_parens = True
+                paren_start = i
+            elif char == ')' and in_parens:
+                # Add format for the parenthesized section (including parentheses)
+                fmt = QTextCharFormat()
+                fmt.setForeground(QColor(255, 0, 0))  # Red
+                layout_format = QTextLayout.FormatRange()
+                layout_format.start = paren_start
+                layout_format.length = i - paren_start + 1
+                layout_format.format = fmt
+                format_ranges.append(layout_format)
+                in_parens = False
+        
+        # Apply formats before layout
+        layout.setFormats(format_ranges)
+        
+        # Create the layout
+        layout.beginLayout()
+        line = layout.createLine()
+        layout.endLayout()
+        
+        # Position and draw the layout
+        painter.translate(option.rect.left() + 2, option.rect.top())
+        layout.draw(painter, QPointF(0, (option.rect.height() - layout.boundingRect().height()) / 2))
+        
+        painter.restore()
 
 
 class RecipeWindow(QWidget):
@@ -324,16 +390,6 @@ class RecipeWindow(QWidget):
                 return data
             elif role == Qt.ItemDataRole.UserRole:
                 return data
-            elif role == Qt.ItemDataRole.ForegroundRole:
-                # Return color for consumables column
-                if column == 3:  # Consumables column
-                    preferred, rejected = self.consumables_data[row]
-                    if rejected and preferred:
-                        return QBrush(QColor(128, 0, 0))  # Dark red for mixed
-                    elif rejected:
-                        return QBrush(QColor(255, 0, 0))  # Bright red for rejected only
-                    else:
-                        return QBrush(QColor(0, 0, 0))  # Black for preferred only
             return None
 
         def add_row(
@@ -681,6 +737,10 @@ class RecipeWindow(QWidget):
         self.recipe_table_view = RecipeWindow.RecipeTableView(self)
         self.recipe_table_proxy_model = RecipeWindow.RecipeTableProxyModel(self, self.settings)
         self.recipe_table_proxy_model.setSourceModel(self.recipe_table_model)
+        
+        # Apply custom delegate to consumables column
+        consumables_delegate = ConsumablesDelegate(self)
+        self.recipe_table_view.setItemDelegateForColumn(3, consumables_delegate)
         
         self.toolbox.techSliderChanged.connect(self.handle_tech_slider_change)
         self.toolbox.tech_filter_all_widget.slider.valueChanged.connect(
