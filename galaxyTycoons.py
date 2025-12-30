@@ -6,7 +6,7 @@ from PySide6.QtCore import QSize, QThread
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QTabWidget
 
-from api.gameData import save_gamedata, get_gamedata
+from api.gameData import GameDataManager
 from api.exchange import Exchange
 from configurationUi import ConfigurationWindow
 from recipeUi import RecipeWindow
@@ -30,7 +30,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
 
         # Create and start RecipeWorker thread
-        self.recipe_worker = RecipeWorker(get_gamedata().recipes, self.settings.tech_level_maximums)
+        self.recipe_worker = RecipeWorker(GameDataManager.get().recipes, self.settings.tech_level_maximums)
         self.recipe_worker_thread = QThread(self)
         self.recipe_worker_thread.setObjectName("RecipeWorkerThread")
         self.recipe_worker.moveToThread(self.recipe_worker_thread)
@@ -81,7 +81,7 @@ class MainWindow(QMainWindow):
         self.investments_tab.close()
         self.configuration_tab.close()
 
-        save_gamedata()
+        GameDataManager.save()
         Exchange.close()
 
         self.settings.save_settings()

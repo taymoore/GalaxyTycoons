@@ -7,7 +7,7 @@ from typing import Tuple, Union, List
 import logging
 import itertools
 
-from api.gameData import get_gamedata, get_building, get_worker, get_item_name, get_worker_housing
+from api.gameData import GameDataManager
 from api.exchange import Exchange
 from api.models.gameData import WorkerType
 
@@ -136,7 +136,7 @@ def calculate_profit_and_consumables(recipe):
             if the calculation is successful. Returns None if the calculation cannot be performed.
     """
     try:
-        building = get_building(recipe.producedIn)
+        building = GameDataManager.get_building(recipe.producedIn)
         listing = Exchange.get_listing(recipe.output.id)
         base_profit_per_hour = listing.current_price * recipe.output.am / 100
 
@@ -155,7 +155,7 @@ def calculate_profit_and_consumables(recipe):
         for worker_type, worker_count in enumerate(building.workersNeeded or [], start=1):
             if worker_count == 0:
                 continue
-            worker = get_worker(worker_type)
+            worker = GameDataManager.get_worker(worker_type)
             consumable_id_set.update(
                 [consumable.matId for consumable in worker.consumables]
             )
@@ -181,7 +181,7 @@ def calculate_profit_and_consumables(recipe):
                     consumable_optional_missed_count = 0
                     consumable_essential_missed_count = 0
                     combination_valid = True
-                    worker = get_worker(worker_type)
+                    worker = GameDataManager.get_worker(worker_type)
                     for consumable in worker.consumables:
                         # If consumable is in this combination, calculate its cost
                         if consumable.matId in consumable_list:
@@ -232,13 +232,13 @@ def calculate_profit_and_consumables(recipe):
                     consumable_preferred_combination = consumable_list
         if optimal_profit_per_hour == float("-inf"):
             _logger.debug(
-                f"Could not calculate profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}). Base profit/hr: {base_profit_per_hour:,.2f}."
+                f"Could not calculate profit for recipe {GameDataManager.get_item_name(recipe.output.id)} ({recipe.id}). Base profit/hr: {base_profit_per_hour:,.2f}."
             )
             return None
 
         if consumable_preferred_combination is None:
             _logger.error(
-                f"No valid consumable combination found for recipe {get_item_name(recipe.output.id)} ({recipe.id}). This should not happen."
+                f"No valid consumable combination found for recipe {GameDataManager.get_item_name(recipe.output.id)} ({recipe.id}). This should not happen."
             )
             return None
         consumable_rejected_combination = consumable_id_set.difference(
@@ -265,7 +265,7 @@ def calculate_profit_and_consumables(recipe):
         ):
             if worker_count == 0:
                 continue
-            worker_housing_building = get_worker_housing(WorkerType(worker_type))
+            worker_housing_building = GameDataManager.get_worker_housing(WorkerType(worker_type))
             for material in worker_housing_building.constructionMaterials:
                 material_listing = Exchange.get_listing(material.id)
                 if material_listing.current_price < 1:
@@ -283,7 +283,7 @@ def calculate_profit_and_consumables(recipe):
 
         return optimal_profit_per_hour - building_depreciation_per_hour, consumable_preferred_combination, consumable_rejected_combination
     except Exception as e:
-        _logger.error(f"Error calculating profit for recipe {get_item_name(recipe.output.id)} ({recipe.id}): {e}")
+        _logger.error(f"Error calculating profit for recipe {GameDataManager.get_item_name(recipe.output.id)} ({recipe.id}): {e}")
         return None
 
 
@@ -301,11 +301,11 @@ def format_consumables(preferred: tuple[int, ...], rejected: tuple[int, ...]) ->
     parts = []
     
     if preferred:
-        preferred_names = sorted(get_item_name(c_id) for c_id in preferred)
+        preferred_names = sorted(GameDataManager.get_item_name(c_id) for c_id in preferred)
         parts.append(", ".join(preferred_names))
     
     if rejected:
-        rejected_names = sorted(get_item_name(c_id) for c_id in rejected)
+        rejected_names = sorted(GameDataManager.get_item_name(c_id) for c_id in rejected)
         parts.append(f"({', '.join(rejected_names)})")
     
     return " ".join(parts) if parts else "None"
@@ -323,8 +323,8 @@ def find_best_recipe_for_building(building_id: int, tech_level: int = float("inf
         None | tuple[str, float, tuple[int, ...], tuple[int, ...]]: Recipe name, profit/hr, preferred consumables, and rejected consumables
     """
     try:
-        game_data = get_gamedata()
-        building = get_building(building_id)
+        game_data = GameDataManager.get()
+        building = GameDataManager.get_building(building_id)
         
         best_recipe = None
         best_profit = float("-inf")
@@ -355,7 +355,7 @@ def find_best_recipe_for_building(building_id: int, tech_level: int = float("inf
         if best_recipe is None:
             return None
         
-        return get_item_name(best_recipe.output.id), best_profit, best_preferred, best_rejected
+        return GameDataManager.get_item_name(best_recipe.output.id), best_profit, best_preferred, best_rejected
     except Exception as e:
         _logger.error(f"Error finding best recipe for building {building_id}: {e}")
         return None

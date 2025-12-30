@@ -43,7 +43,7 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
 from utils import align_add
-from api.gameData import get_gamedata, get_item_name, get_building, get_worker
+from api.gameData import GameDataManager
 from api.models.gameData import Recipe, BuildingSpecialization, Building, WorkerType
 from api.exchange import Exchange
 from api.models.exchange import Listing
@@ -103,7 +103,7 @@ class PlanetsWindow(QWidget):  # Changed from QMainWindow
                 return data
 
         def populate_table(self) -> None:
-            systems = get_gamedata().systems
+            systems = GameDataManager.get().systems
             # Find location of exchange station
             exchange_loc = None
             for system in systems:

@@ -3,9 +3,7 @@ import logging
 import pickle
 from pathlib import Path
 from requests import Session, RequestException
-import atexit
 from datetime import datetime, timedelta
-from PySide6.QtCore import Signal
 import pandas as pd
 import os
 from dotenv import load_dotenv
@@ -15,22 +13,23 @@ from api.models.exchange import Listing, Listings
 # Load environment variables from .env file
 load_dotenv()
 
-CACHE_FILENAME = "exchange.pkl"
-CACHE_DIR = ".data"
-UPDATE_RATE = timedelta(minutes=5)
-
 _logger = logging.getLogger(__name__)
 
-listings_updated = Signal(Dict[int, Listing])
 
 class Exchange:
+    """Manages exchange listings caching, fetching, and retrieval."""
+    
+    _CACHE_FILENAME = "exchange.pkl"
+    _CACHE_DIR = ".data"
+    _UPDATE_RATE = timedelta(minutes=5)
+    
     listings: Dict[int, Listing] = {}
     updated_time: Optional[datetime] = None
     session = Session()
 
     @staticmethod
     def load_cache() -> None:
-        cache_path = Path(CACHE_DIR) / CACHE_FILENAME
+        cache_path = Path(Exchange._CACHE_DIR) / Exchange._CACHE_FILENAME
         try:
             if cache_path.exists():
                 with open(cache_path, "rb") as f:
@@ -48,8 +47,8 @@ class Exchange:
 
     @staticmethod
     def _save_to_disk() -> None:
-        cache_path = Path(CACHE_DIR) / CACHE_FILENAME
-        Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
+        cache_path = Path(Exchange._CACHE_DIR) / Exchange._CACHE_FILENAME
+        Path(Exchange._CACHE_DIR).mkdir(parents=True, exist_ok=True)
         try:
             with cache_path.open("wb") as f:
                 pickle.dump((Exchange.listings, Exchange.updated_time), f)
@@ -70,7 +69,7 @@ class Exchange:
     def update_listings(force: bool = False):
         current_time = datetime.now()
         if not force and (
-            Exchange.updated_time and current_time - Exchange.updated_time < UPDATE_RATE
+            Exchange.updated_time and current_time - Exchange.updated_time < Exchange._UPDATE_RATE
         ):
             return
 
@@ -132,7 +131,7 @@ class Exchange:
     def get_listing(id: int) -> Optional[Listing]:
         current_time = datetime.now()
         if id in Exchange.listings:
-            if current_time - Exchange.updated_time < UPDATE_RATE:
+            if current_time - Exchange.updated_time < Exchange._UPDATE_RATE:
                 return Exchange.listings.get(id)
             else:
                 _logger.info(f"Cache for listing {id} is stale, fetching new data.")

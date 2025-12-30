@@ -43,7 +43,7 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
 from utils import align_add
-from api.gameData import get_gamedata, get_item_name, get_building, get_worker
+from api.gameData import GameDataManager
 from api.models.gameData import Recipe, BuildingSpecialization, Building, WorkerType
 from api.exchange import Exchange
 from api.models.exchange import Listing

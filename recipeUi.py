@@ -44,7 +44,7 @@ import matplotlib.cm as cm
 
 from settings import Settings
 from utils import align_add, calculate_profit_and_consumables, ConsumablesDelegate, format_consumables
-from api.gameData import get_gamedata, get_item_name, get_building, get_worker
+from api.gameData import GameDataManager
 from api.models.gameData import Recipe, BuildingSpecialization, Building, WorkerType
 from api.exchange import Exchange
 from api.models.exchange import Listing
@@ -344,10 +344,10 @@ class RecipeWindow(QWidget):
             consumable_rejected: tuple[int, ...],
         ) -> None:
             row = []
-            row.append(get_item_name(recipe.output.id))
+            row.append(GameDataManager.get_item_name(recipe.output.id))
             row.append(profit_per_hour)
             row.append(
-                f"{get_building(recipe.producedIn).specialization.name} {recipe.reqTech}"
+                f"{GameDataManager.get_building(recipe.producedIn).specialization.name} {recipe.reqTech}"
             )
             row.append(format_consumables(consumable_preferred, consumable_rejected))
 
@@ -462,7 +462,7 @@ class RecipeWindow(QWidget):
             recipe = source_model.recipes[source_row]
 
             # Filter based on tech
-            building_specialization = get_building(recipe.producedIn).specialization
+            building_specialization = GameDataManager.get_building(recipe.producedIn).specialization
             max_tech_level = self.tech_level_filters.get(building_specialization, float('inf'))
             if recipe.reqTech > max_tech_level + self.tech_level_modifier: 
                 return False
@@ -705,7 +705,7 @@ class RecipeWindow(QWidget):
     # Called from recipe worker when a new recipe is added
     @Slot(Recipe)
     def handle_recipe_added(self, recipe: Recipe) -> None:
-        building = get_building(recipe.producedIn)
+        building = GameDataManager.get_building(recipe.producedIn)
 
         # Calculate profit and consumables
         result = calculate_profit_and_consumables(recipe)
@@ -750,7 +750,7 @@ class RecipeWindow(QWidget):
                 profit_per_hour, consumable_preferred_combination, consumable_rejected_combination = result
 
             if profit_per_hour < 0:
-                _logger.debug(f"Recipe '{get_item_name(recipe.output.id)}' now has negative profit per hour: {profit_per_hour:.2f}.")
+                _logger.debug(f"Recipe '{GameDataManager.get_item_name(recipe.output.id)}' now has negative profit per hour: {profit_per_hour:.2f}.")
                 _logger.debug(f"Preferred consumables: {consumable_preferred_combination}, Rejected consumables: {consumable_rejected_combination}.")
             self.recipe_table_model.setData(self.recipe_table_model.index(row, 1), profit_per_hour, Qt.ItemDataRole.EditRole)
             self.recipe_table_model.update_consumables(row, consumable_preferred_combination, consumable_rejected_combination)

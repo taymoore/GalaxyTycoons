@@ -3,7 +3,7 @@ import logging
 from PySide6.QtCore import QObject, Slot, Signal, QThread, QRunnable, QSemaphore
 
 from api.models.gameData import Recipe, BuildingSpecialization, RecipeType, Worker, WorkerType
-from api.gameData import get_item_name, get_building, get_worker
+from api.gameData import GameDataManager
 from api.exchange import Exchange
 from api.models.exchange import Listing
 
@@ -46,11 +46,11 @@ class RecipeWorker(QObject):
 
             assert isinstance(recipe, Recipe)
             listing = Exchange.get_listing(recipe.output.id)
-            if get_item_name(listing.id) == "TEMP":
+            if GameDataManager.get_item_name(listing.id) == "TEMP":
                 continue
 
             # Update tech level slider to the maximum
-            building = get_building(recipe.producedIn)
+            building = GameDataManager.get_building(recipe.producedIn)
             if recipe.reqTech > self.tech_level_maximum.get(building.specialization, 1):
                 self.tech_level_change_signal.emit(
                     building.specialization, recipe.reqTech

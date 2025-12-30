@@ -49,7 +49,7 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
 from utils import align_add, find_best_recipe_for_building, ConsumablesDelegate, format_consumables
-from api.gameData import get_gamedata, get_item_name, get_building, get_worker
+from api.gameData import GameDataManager
 from api.models.gameData import Recipe, BuildingSpecialization, Building, WorkerType
 from api.exchange import Exchange
 from api.models.exchange import Listing
@@ -293,7 +293,7 @@ class ConfigurationWindow(QWidget):
                     return
                 
                 # Find building ID by name
-                game_data = get_gamedata()
+                game_data = GameDataManager.get()
                 building_id = None
                 for building in game_data.buildings:
                     if building.name == building_name:
@@ -336,9 +336,9 @@ class ConfigurationWindow(QWidget):
                     if consumables_rejected or consumables_preferred:
                         tooltip_parts = []
                         if consumables_preferred:
-                            tooltip_parts.append(f"Preferred: {', '.join(sorted(get_item_name(c_id) for c_id in consumables_preferred))}")
+                            tooltip_parts.append(f"Preferred: {', '.join(sorted(GameDataManager.get_item_name(c_id) for c_id in consumables_preferred))}")
                         if consumables_rejected:
-                            tooltip_parts.append(f"Rejected: {', '.join(sorted(get_item_name(c_id) for c_id in consumables_rejected))}")
+                            tooltip_parts.append(f"Rejected: {', '.join(sorted(GameDataManager.get_item_name(c_id) for c_id in consumables_rejected))}")
                         consumables_item.setToolTip("\n".join(tooltip_parts))
                     else:
                         consumables_item.setToolTip("")
@@ -570,7 +570,7 @@ class ConfigurationWindow(QWidget):
     def _get_planet_names(self) -> List[str]:
         """Extract all planet names from gameData."""
         planet_names = []
-        game_data = get_gamedata()
+        game_data = GameDataManager.get()
         for system in game_data.systems:
             if system.planets:
                 for planet in system.planets:
@@ -579,7 +579,7 @@ class ConfigurationWindow(QWidget):
     
     def _get_building_names(self) -> List[str]:
         """Extract all building names from gameData."""
-        game_data = get_gamedata()
+        game_data = GameDataManager.get()
         return [building.name for building in game_data.buildings]
     
     @Slot()
