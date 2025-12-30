@@ -114,33 +114,36 @@ class RecipeWindow(QWidget):
             self.p1.vb.enableAutoRange()
 
             listing = Exchange.get_listing(recipe.output.id)
-            listing.average_price_history.sort_index(inplace=True)
+            df = listing.dataframe.copy()
+            df.sort_index(inplace=True)
 
-            # Convert the index to Unix timestamps (numerical format)
+            # Prepare average price data (drop NaN values)
+            avg_price_df = df[['average_price']].dropna()
             output_average_price_index = (
-                pd.to_datetime(listing.average_price_history.index).astype("int64")
+                pd.to_datetime(avg_price_df.index).astype("int64")
                 // 10**9
             )
-
-            # Ensure y_data is numeric
             output_average_price = (
-                pd.to_numeric(listing.average_price_history["price"], errors="coerce")
+                pd.to_numeric(avg_price_df["average_price"], errors="coerce")
                 * recipe.output.am
                 / (100 * recipe.timeMinutes / 60)
             )
+            
+            # Prepare current price data (drop NaN values)
+            curr_price_df = df[['current_price']].dropna()
             output_current_price_index = (
-                pd.to_datetime(listing.current_price_history.index).astype("int64")
+                pd.to_datetime(curr_price_df.index).astype("int64")
                 // 10**9
             )
             output_current_price = (
-                pd.to_numeric(listing.current_price_history["price"], errors="coerce")
+                pd.to_numeric(curr_price_df["current_price"], errors="coerce")
                 * recipe.output.am
                 / (100 * recipe.timeMinutes / 60)
             )
 
             # Store data points for nearest-point calculation
             self.data_points = list(zip(output_average_price_index, output_average_price))
-            self.listing_price = listing.average_price_history["price"].to_numpy() / 100
+            self.listing_price = avg_price_df["average_price"].to_numpy() / 100
 
             # Plot the data
             self.p1.plot(
@@ -174,26 +177,31 @@ class RecipeWindow(QWidget):
             ]
             for material_idx, material_amount in enumerate(recipe.inputs):
                 material_listing = Exchange.get_listing(material_amount.id)
-                material_listing.average_price_history.sort_index(inplace=True)
-                input_average_price = material_listing.average_price_history.copy()
-                input_current_price = material_listing.current_price_history.copy()
+                material_df = material_listing.dataframe.copy()
+                material_df.sort_index(inplace=True)
+                
+                # Prepare average price data (drop NaN values)
+                input_average_price = material_df[["average_price"]].dropna().copy()
                 input_average_price.index = (
                     pd.to_datetime(input_average_price.index).astype("int64") // 10**9
                 )
                 input_average_price["price"] = (
-                    input_average_price["price"]
+                    input_average_price["average_price"]
                     * material_amount.am
                     / (100 * recipe.timeMinutes / 60)
                 )
+                
+                # Prepare current price data (drop NaN values)
+                input_current_price = material_df[["current_price"]].dropna().copy()
                 input_current_price.index = (
                     pd.to_datetime(input_current_price.index).astype("int64") // 10**9
                 )
                 input_current_price["price"] = (
-                    input_current_price["price"]
+                    input_current_price["current_price"]
                     * material_amount.am
                     / (100 * recipe.timeMinutes / 60)
                 )
-                # _logger.debug(f"Plotting ingredient {material_listing.name} ({material_amount.id}). Latest average price history: {material_listing.average_price_history['price'].iloc[-1]/100:.2f}.")
+                # _logger.debug(f"Plotting ingredient {material_listing.name} ({material_amount.id}). Latest average price history: {material_df['average_price'].dropna().iloc[-1]/100:.2f} if len(material_df['average_price'].dropna()) > 0 else 'N/A'.")
 
                 # Assign a unique color to each ingredient
                 ingredient_color = ingredient_colors[material_idx]
