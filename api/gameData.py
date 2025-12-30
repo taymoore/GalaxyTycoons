@@ -4,8 +4,13 @@ import pickle
 from pathlib import Path
 import requests
 from functools import cache
+import os
+from dotenv import load_dotenv
 
 from api.models.gameData import GameData, Building, Worker, WorkerType
+
+# Load environment variables from .env file
+load_dotenv()
 
 CACHE_FILENAME = "game_data.pkl"
 
@@ -15,7 +20,12 @@ _logger = logging.getLogger(__name__)
 
 
 def _get_gamedata() -> GameData:
-    content_response = requests.get("https://api.g2.galactictycoons.com/gamedata.json")
+    api_key = os.getenv("GT_API_KEY")
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    
+    content_response = requests.get("https://api.g2.galactictycoons.com/gamedata.json", headers=headers)
     content_response.raise_for_status()
     if content_response is None:
         raise ValueError("Failed to fetch game data from API.")

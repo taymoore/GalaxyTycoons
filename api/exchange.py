@@ -7,12 +7,17 @@ import atexit
 from datetime import datetime, timedelta
 from PySide6.QtCore import Signal
 import pandas as pd
+import os
+from dotenv import load_dotenv
 
 from api.models.exchange import Listing, Listings
 
+# Load environment variables from .env file
+load_dotenv()
+
 CACHE_FILENAME = "exchange.pkl"
 CACHE_DIR = ".data"
-UPDATE_RATE = timedelta(minutes=30)
+UPDATE_RATE = timedelta(minutes=5)
 
 _logger = logging.getLogger(__name__)
 
@@ -29,51 +34,7 @@ class Exchange:
         try:
             if cache_path.exists():
                 with open(cache_path, "rb") as f:
-                    loaded_listings = pickle.load(f)
-                
-                # Migrate old Listing format to new format
-                Exchange.listings = {}
-                for listing_id, listing in loaded_listings.items():
-                    # Check if this is an old Listing (has average_price_history/current_price_history)
-                    if hasattr(listing, 'average_price_history') and hasattr(listing, 'current_price_history'):
-                        _logger.info(f"Migrating old Listing format for {listing.name} (ID: {listing.id})")
-                        
-                        # Extract price columns from old dataframes
-                        avg_df = listing.average_price_history.copy()
-                        curr_df = listing.current_price_history.copy()
-                        
-                        # Rename 'price' column to match new schema
-                        if 'price' in avg_df.columns:
-                            avg_df = avg_df.rename(columns={'price': 'average_price'})
-                        if 'price' in curr_df.columns:
-                            curr_df = curr_df.rename(columns={'price': 'current_price'})
-                        
-                        # Merge both dataframes on their index (timestamps), using outer join to keep all timestamps
-                        df = avg_df[['average_price']].join(curr_df[['current_price']], how='outer')
-                        
-                        # Add total_quantity_available column (use current value for all rows since we don't have historical data)
-                        df['total_quantity_available'] = listing.total_quantity_available if hasattr(listing, 'total_quantity_available') else pd.NA
-                        
-                        # Create new Listing object
-                        new_listing = Listing(
-                            matId=listing.id,
-                            matName=listing.name,
-                            currentPrice=listing.current_price,
-                            avgPrice=listing.average_price,
-                            totalQtyAvailable=listing.total_quantity_available if hasattr(listing, 'total_quantity_available') else 0,
-                            orders=listing.orders if hasattr(listing, 'orders') else [],
-                            avgQtySoldDaily=listing.average_quantity_sold_daily if hasattr(listing, 'average_quantity_sold_daily') else 0.0,
-                            priceHistory=listing.price_history if hasattr(listing, 'price_history') else []
-                        )
-                        new_listing.dataframe = df
-                        new_listing.updated_time = listing.updated_time if hasattr(listing, 'updated_time') else datetime.now()
-                        Exchange.listings[listing_id] = new_listing
-                    elif hasattr(listing, 'dataframe'):
-                        # Already new format
-                        Exchange.listings[listing_id] = listing
-                    else:
-                        _logger.warning(f"Unknown Listing format for {listing.name} (ID: {listing.id}), skipping")
-                
+                    Exchange.listings, Exchange.updated_time = pickle.load(f)
                 _logger.info("Loaded game data from cache file.")
             else:
                 Exchange.listings = {}
@@ -91,7 +52,7 @@ class Exchange:
         Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
         try:
             with cache_path.open("wb") as f:
-                pickle.dump(Exchange.listings, f)
+                pickle.dump((Exchange.listings, Exchange.updated_time), f)
             _logger.info(f"Cache saved to {cache_path}.")
         except IOError as e:
             _logger.error(f"Error saving cache to {cache_path}: {e}")
@@ -114,9 +75,17 @@ class Exchange:
             return
 
         url = "https://api.g2.galactictycoons.com/public/exchange/mat-details/"
+        
+        api_key = os.getenv("GT_API_KEY")
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         try:
-            response = Exchange.session.get(url)
+            response = Exchange.session.get(url, headers=headers)
+            if response.status_code == 429:
+                _logger.warning("Rate limited by exchange API.")
+                return
             response.raise_for_status()
             try:
                 data = response.json()
