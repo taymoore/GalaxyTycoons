@@ -6,6 +6,7 @@ import pandas as pd
 from typing import Tuple, Union, List
 import logging
 import itertools
+import math
 
 from api.gameData import GameDataManager
 from api.exchange import Exchange
@@ -77,6 +78,79 @@ class ConsumablesDelegate(QStyledItemDelegate):
         
         painter.restore()
 
+
+class GradientColorDelegate(QStyledItemDelegate):
+    """Custom delegate that renders cells with gradient background color based on value.
+    
+    Higher values are colored green, lower values are colored red.
+    """
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.min_value = 0.0
+        self.max_value = 1.0
+    
+    def set_value_range(self, min_value: float, max_value: float) -> None:
+        """Set the min and max values for the gradient range."""
+        self.min_value = min_value
+        self.max_value = max_value if max_value > min_value else min_value + 1.0
+    
+    def _get_gradient_color(self, value: float) -> QColor:
+        """Get a color based on the value using a red-to-green gradient.
+        
+        Args:
+            value: The numeric value to convert to a color.
+            
+        Returns:
+            A QColor interpolated between red (low values) and green (high values).
+        """
+        # Normalize value to 0-1 range
+        if self.max_value == self.min_value:
+            normalized = 0.5
+        else:
+            normalized = (value - self.min_value) / (self.max_value - self.min_value)
+        
+        # Clamp to 0-1 range
+        normalized = max(0.0, min(1.0, normalized))
+        
+        # Interpolate from red (0) to green (1)
+        # Red: (255, 0, 0)
+        # Green: (0, 255, 0)
+        red = int(255 * (1 - normalized))
+        green = int(255 * normalized)
+        
+        return QColor(red, green, 0)
+    
+    def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
+        """Paint the cell with gradient background color based on value."""
+        # Get the numeric value from UserRole
+        value = index.data(Qt.ItemDataRole.UserRole)
+        
+        # Handle invalid values (None, -1, inf, -inf)
+        if value is None or value == -1:
+            return super().paint(painter, option, index)
+        
+        try:
+            numeric_value = float(value)
+            # Skip inf and -inf values
+            if not math.isfinite(numeric_value):
+                return super().paint(painter, option, index)
+        except (TypeError, ValueError):
+            return super().paint(painter, option, index)
+        
+        # Get the gradient color for this value
+        color = self._get_gradient_color(numeric_value)
+        
+        # Initialize style option
+        self.initStyleOption(option, index)
+        
+        # Draw the background with the gradient color
+        painter.save()
+        painter.fillRect(option.rect, color)
+        painter.restore()
+        
+        # Draw the text using the default delegate
+        super().paint(painter, option, index)
 
 def align_and_interpolate(
     *args: Union[pd.Series, pd.DataFrame],

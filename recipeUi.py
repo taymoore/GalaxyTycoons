@@ -45,7 +45,7 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
 from settings import Settings
-from utils import align_add, calculate_profit_and_consumables, ConsumablesDelegate, format_consumables
+from utils import align_add, calculate_profit_and_consumables, ConsumablesDelegate, GradientColorDelegate, format_consumables
 from api.gameData import GameDataManager
 from api.models.gameData import Recipe, BuildingSpecialization, Building, WorkerType
 from api.exchange import Exchange
@@ -391,6 +391,11 @@ class RecipeWindow(QWidget):
                 "Tech Req.",
                 "Consumables",
             ]
+            # Track min/max values for gradient coloring
+            self.profit_min = 0.0
+            self.profit_max = 1.0
+            self.quantity_min = 0.0
+            self.quantity_max = 1.0
 
         def rowCount(self, /, parent: QModelIndex | QPersistentModelIndex = ...) -> int:
             return len(self.table_data)
@@ -451,6 +456,9 @@ class RecipeWindow(QWidget):
             self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
             self.table_data.append(row)
             self.endInsertRows()
+            
+            # Update min/max values for gradient coloring
+            self.update_min_max_values()
 
         def setData(
             self,
@@ -500,6 +508,34 @@ class RecipeWindow(QWidget):
                 first_row = min(values_dict.keys())
                 last_row = max(values_dict.keys())
                 self.dataChanged.emit(self.index(first_row, 3), self.index(last_row, 3))
+        
+        def update_min_max_values(self) -> None:
+            """Update min/max values for profit and quantity columns for gradient coloring."""
+            if not self.table_data:
+                self.profit_min = self.profit_max = 0.0
+                self.quantity_min = self.quantity_max = 0.0
+                return
+            
+            # Extract profit values (column 1), filtering out inf and -inf
+            profit_values = [row[1] for row in self.table_data if isinstance(row[1], (int, float)) and math.isfinite(row[1])]
+            if profit_values:
+                self.profit_min = min(profit_values)
+                self.profit_max = max(profit_values)
+                if self.profit_max == self.profit_min:
+                    self.profit_max = self.profit_min + 1.0
+            else:
+                self.profit_min = self.profit_max = 0.0
+            
+            # Extract quantity values (column 2), apply log transform, filter out inf and -inf
+            quantity_values = [math.log1p(row[2]) * QUANTITY_SOLD_SCALING_FACTOR for row in self.table_data 
+                              if isinstance(row[2], (int, float)) and math.isfinite(row[2])]
+            if quantity_values:
+                self.quantity_min = min(quantity_values)
+                self.quantity_max = max(quantity_values)
+                if self.quantity_max == self.quantity_min:
+                    self.quantity_max = self.quantity_min + 1.0
+            else:
+                self.quantity_min = self.quantity_max = 0.0
 
 
     class RecipeTableView(QTableView):
@@ -833,6 +869,19 @@ class RecipeWindow(QWidget):
         consumables_delegate = ConsumablesDelegate(self)
         self.recipe_table_view.setItemDelegateForColumn(5, consumables_delegate)
         
+        # Apply gradient color delegates to profit and quantity columns
+        self.profit_delegate = GradientColorDelegate(self)
+        self.quantity_delegate = GradientColorDelegate(self)
+        self.recipe_table_view.setItemDelegateForColumn(1, self.profit_delegate)
+        self.recipe_table_view.setItemDelegateForColumn(2, self.quantity_delegate)
+        
+        # Connect to model data changes to update delegate ranges
+        self.recipe_table_model.dataChanged.connect(self.update_delegate_ranges)
+        self.recipe_table_model.rowsInserted.connect(self.update_delegate_ranges)
+        
+        # Connect to proxy model layout changes to update delegate ranges based on visible rows
+        self.recipe_table_proxy_model.layoutChanged.connect(self.update_delegate_ranges)
+        
         self.toolbox.techSliderChanged.connect(self.handle_tech_slider_change)
         self.toolbox.tech_filter_all_widget.slider.valueChanged.connect(
             self.handle_all_tech_slider_change
@@ -881,6 +930,56 @@ class RecipeWindow(QWidget):
         self.pending_weight = weight
         # Restart the timer each time slider moves
         self.value_weight_debounce_timer.start(300)  # 300ms debounce
+    
+    @Slot()
+    def update_delegate_ranges(self) -> None:
+        """Update the min/max ranges for gradient delegates based on visible (filtered) rows only."""
+        # Calculate ranges from visible rows in the proxy model
+        profit_values = []
+        quantity_values = []
+        
+        # Iterate through all rows in the proxy model (only visible rows)
+        for proxy_row in range(self.recipe_table_proxy_model.rowCount()):
+            source_index = self.recipe_table_proxy_model.mapToSource(
+                self.recipe_table_proxy_model.index(proxy_row, 0)
+            )
+            source_row = source_index.row()
+            
+            # Get profit value (column 1)
+            profit_val = self.recipe_table_model.table_data[source_row][1]
+            if isinstance(profit_val, (int, float)) and math.isfinite(profit_val):
+                profit_values.append(profit_val)
+            
+            # Get quantity value (column 2) with log transformation
+            quantity_val = self.recipe_table_model.table_data[source_row][2]
+            if isinstance(quantity_val, (int, float)) and math.isfinite(quantity_val):
+                quantity_values.append(math.log1p(quantity_val) * QUANTITY_SOLD_SCALING_FACTOR)
+        
+        # Update profit delegate range
+        if profit_values:
+            profit_min = min(profit_values)
+            profit_max = max(profit_values)
+            if profit_max == profit_min:
+                profit_max = profit_min + 1.0
+        else:
+            profit_min = profit_max = 0.0
+        
+        self.profit_delegate.set_value_range(profit_min, profit_max)
+        
+        # Update quantity delegate range
+        if quantity_values:
+            quantity_min = min(quantity_values)
+            quantity_max = max(quantity_values)
+            if quantity_max == quantity_min:
+                quantity_max = quantity_min + 1.0
+        else:
+            quantity_min = quantity_max = 0.0
+        
+        self.quantity_delegate.set_value_range(quantity_min, quantity_max)
+        
+        # Trigger a repaint of the affected columns
+        if self.recipe_table_model.rowCount() > 0:
+            self.recipe_table_view.viewport().update()
     
     @Slot()
     def on_value_weight_debounce_timeout(self) -> None:
