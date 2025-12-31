@@ -268,7 +268,7 @@ class RecipeWindow(QWidget):
                     last_x = qty_available_index[-1]
                     last_y_current = qty_available_data.iloc[-1]
                     last_y_ma = qty_available_ma.iloc[-1]
-                    label2 = pg.TextItem(text=f"Qty Available: {last_y_current:,.0f}\nMA: {last_y_ma:,.0f}", color="#0088ff", anchor=(1, 1))
+                    label2 = pg.TextItem(text=f"Qty Available: {last_y_current:,.0f}\nMA: {last_y_ma:,.0f}", color="#0088ff", anchor=(1, 0))
                     label2.setZValue(10)
                     label2.setPos(last_x, last_y_ma)
                     self.p2.addItem(label2)
@@ -312,7 +312,7 @@ class RecipeWindow(QWidget):
                     last_x = qty_sold_index[-1]
                     last_y_current = qty_sold_data.iloc[-1]
                     last_y_ma = qty_sold_ma.iloc[-1]
-                    label3 = pg.TextItem(text=f"Qty Sold: {last_y_current:,.0f}\nMA: {last_y_ma:,.0f}", color="#ff8800", anchor=(1, 1))
+                    label3 = pg.TextItem(text=f"Qty Sold: {last_y_current:,.0f}\nMA: {last_y_ma:,.0f}", color="#ff8800", anchor=(1, 0))
                     label3.setZValue(10)
                     label3.setPos(last_x, last_y_ma)
                     self.p3.addItem(label3)

@@ -4,7 +4,9 @@ import pickle
 from tkinter import SE
 from PySide6.QtCore import QSize, QThread
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QMainWindow, QTabWidget
+from PySide6.QtWidgets import QMainWindow, QTabWidget, QMenuBar
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QApplication
 
 from api.gameData import GameDataManager
 from api.exchange import Exchange
@@ -57,6 +59,46 @@ class MainWindow(QMainWindow):
 
         # Set the tabs as the central widget
         self.setCentralWidget(self.tabs)
+
+        # Create menubar
+        self._create_menubar()
+
+    def _create_menubar(self) -> None:
+        """Create the menubar with export options."""
+        menubar = self.menuBar()
+        
+        tools_menu = menubar.addMenu("Tools")
+        
+        copy_listings_action = QAction("Copy Listings to Clipboard", self)
+        copy_listings_action.triggered.connect(self._copy_listings_to_clipboard)
+        tools_menu.addAction(copy_listings_action)
+    
+    def _copy_listings_to_clipboard(self) -> None:
+        """Copy all listings to clipboard in tab-separated format for Excel."""
+        if not Exchange.listings:
+            _logger.warning("No listings available to copy.")
+            return
+        
+        lines = []
+        
+        # Sort listings by name for consistent output
+        sorted_listings = sorted(
+            Exchange.listings.values(),
+            key=lambda listing: listing.name
+        )
+        
+        # Add each listing
+        for listing in sorted_listings:
+            lines.append(f"{listing.name}\t{listing.current_price/100 if listing.current_price > 0 else 'N/A'}")
+        
+        # Join with newlines
+        table_text = "\n".join(lines)
+        
+        # Copy to clipboard
+        clipboard = QApplication.clipboard()
+        clipboard.setText(table_text)
+        
+        _logger.info(f"Copied {len(sorted_listings)} listings to clipboard.")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """
