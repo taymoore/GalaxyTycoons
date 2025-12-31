@@ -45,7 +45,7 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
 from settings import Settings
-from utils import align_add, calculate_profit_and_consumables, ConsumablesDelegate, GradientColorDelegate, format_consumables
+from utils import align_add, calculate_profit_and_consumables, ConsumablesDelegate, GradientColorDelegate, SpecializationColorDelegate, format_consumables
 from api.gameData import GameDataManager
 from api.models.gameData import Recipe, BuildingSpecialization, Building, WorkerType
 from api.exchange import Exchange
@@ -54,7 +54,7 @@ from recipeWorker import RecipeWorker
 
 _logger = logging.getLogger(__name__)
 
-QUANTITY_SOLD_SCALING_FACTOR = 100.0  # Scaling factor for quantity sold logarithmic transformation
+QUANTITY_SOLD_SCALING_FACTOR = 200.0  # Scaling factor for quantity sold logarithmic transformation
 
 class ValueRecalculationWorker(QObject):
     """Worker that recalculates values in background thread when weight factor changes."""
@@ -874,6 +874,10 @@ class RecipeWindow(QWidget):
         self.quantity_delegate = GradientColorDelegate(self)
         self.recipe_table_view.setItemDelegateForColumn(1, self.profit_delegate)
         self.recipe_table_view.setItemDelegateForColumn(2, self.quantity_delegate)
+        
+        # Apply specialization color delegate to tech requirement column
+        self.specialization_delegate = SpecializationColorDelegate(self)
+        self.recipe_table_view.setItemDelegateForColumn(4, self.specialization_delegate)
         
         # Connect to model data changes to update delegate ranges
         self.recipe_table_model.dataChanged.connect(self.update_delegate_ranges)

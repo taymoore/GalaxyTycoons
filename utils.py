@@ -7,7 +7,8 @@ from typing import Tuple, Union, List
 import logging
 import itertools
 import math
-
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 from api.gameData import GameDataManager
 from api.exchange import Exchange
 from api.models.gameData import WorkerType
@@ -145,6 +146,63 @@ class GradientColorDelegate(QStyledItemDelegate):
         self.initStyleOption(option, index)
         
         # Draw the background with the gradient color
+        painter.save()
+        painter.fillRect(option.rect, color)
+        painter.restore()
+        
+        # Draw the text using the default delegate
+        super().paint(painter, option, index)
+
+
+class SpecializationColorDelegate(QStyledItemDelegate):
+    """Custom delegate that renders cells with unique background colors for each specialization using a colormap."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.specialization_colors = {}  # Maps specialization name to QColor
+        self.colormap = cm.get_cmap('tab20')  # Use tab20 colormap with 20 distinct colors
+    
+    def set_specialization_color(self, specialization_name: str, color: QColor) -> None:
+        """Set a specific color for a specialization."""
+        self.specialization_colors[specialization_name] = color
+    
+    def _get_specialization_color(self, specialization_name: str) -> QColor:
+        """Get or assign a color for a specialization using colormap."""
+        if specialization_name not in self.specialization_colors:
+            # Use hash of specialization name to consistently map to same color
+            hash_value = hash(specialization_name) % 20  # tab20 has 20 colors
+            # Get normalized value between 0 and 1
+            normalized_value = hash_value / 20.0
+            # Get color from colormap
+            rgba = self.colormap(normalized_value)
+            # Convert to QColor (rgba is tuple of 0-1 values)
+            self.specialization_colors[specialization_name] = QColor(
+                int(rgba[0] * 255),
+                int(rgba[1] * 255),
+                int(rgba[2] * 255),
+                int(rgba[3] * 255)
+            )
+        return self.specialization_colors[specialization_name]
+    
+    def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
+        """Paint the cell with background color based on specialization."""
+        # Get the text which contains "SPECIALIZATION LEVEL"
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        if not text:
+            return super().paint(painter, option, index)
+        
+        # Extract specialization name (everything before the space and level number)
+        parts = str(text).rsplit(' ', 1)  # Split on the last space to separate name from level
+        if len(parts) == 2:
+            specialization_name = parts[0]
+            color = self._get_specialization_color(specialization_name)
+        else:
+            return super().paint(painter, option, index)
+        
+        # Initialize style option
+        self.initStyleOption(option, index)
+        
+        # Draw the background with the specialization color
         painter.save()
         painter.fillRect(option.rect, color)
         painter.restore()
