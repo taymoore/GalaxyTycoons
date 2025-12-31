@@ -2,6 +2,7 @@ from tkinter import SE
 from typing import List, Dict
 import logging
 import itertools
+import math
 from pathlib import Path
 import pickle
 import numpy as np
@@ -18,6 +19,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QPersistentModelIndex,
     QPointF,
+    QTimer,
 )
 from PySide6.QtWidgets import (
     QHeaderView,
@@ -51,6 +53,54 @@ from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
 
 _logger = logging.getLogger(__name__)
+
+QUANTITY_SOLD_SCALING_FACTOR = 100.0  # Scaling factor for quantity sold logarithmic transformation
+
+class ValueRecalculationWorker(QObject):
+    """Worker that recalculates values in background thread when weight factor changes."""
+    values_updated = Signal(object)  # dict of {row: value}
+    finished = Signal()
+    
+    def __init__(self, table_data: List[List[float]], weight: float):
+        super().__init__(objectName="ValueRecalculationWorker")
+        self.table_data = table_data
+        self.weight = weight
+    
+    def run(self) -> None:
+        """Recalculate values for all rows with current weight."""
+        try:
+            _logger.debug("ValueRecalculationWorker started")
+            batch_updates = {}
+            batch_size = 100  # Emit updates in batches of 100 rows
+            
+            for row in range(len(self.table_data)):
+                # Check if thread should be interrupted
+                current_thread = QThread.currentThread()
+                if current_thread.isInterruptionRequested():
+                    _logger.debug("ValueRecalculationWorker interrupted")
+                    break
+                
+                profit_per_hour = self.table_data[row][1]
+                quantity_sold_per_hour = self.table_data[row][2]
+                
+                # Apply logarithmic transformation to quantity to reduce impact of very large values
+                # log1p(x) = log(1+x), handles 0 and negative values safely
+                # Scale by QUANTITY_SOLD_SCALING_FACTOR to bring it into comparable range with profit/hr
+                quantity_sold_log = math.log1p(quantity_sold_per_hour) * QUANTITY_SOLD_SCALING_FACTOR
+                
+                # Calculate value: weighted average of profit and log(quantity)
+                # weight is for profit/hr, (1-weight) is for log(quantity)
+                value = (profit_per_hour * self.weight) + (quantity_sold_log * (1 - self.weight))
+                batch_updates[row] = value
+                
+                # Emit batch when we reach batch_size or at the end
+                if len(batch_updates) >= batch_size or row == len(self.table_data) - 1:
+                    self.values_updated.emit(batch_updates)
+                    batch_updates = {}
+        except Exception as e:
+            _logger.error(f"Error in ValueRecalculationWorker: {e}")
+        finally:
+            self.finished.emit()
 
 
 class RecipeWindow(QWidget):
@@ -336,6 +386,8 @@ class RecipeWindow(QWidget):
             self.header_data: List[str] = [
                 "Recipe Output",
                 "Profit / hr",
+                "Quantity Sold",
+                "Value",
                 "Tech Req.",
                 "Consumables",
             ]
@@ -368,7 +420,7 @@ class RecipeWindow(QWidget):
             column = index.column()
             data = self.table_data[row][column]
             if role == Qt.ItemDataRole.DisplayRole:
-                if column == 1:
+                if column == 1 or column == 2 or column == 3:
                     data = "{:,.2f}".format(data) if data != -1 else ""
                 return data
             elif role == Qt.ItemDataRole.UserRole:
@@ -381,10 +433,14 @@ class RecipeWindow(QWidget):
             profit_per_hour: float,
             consumable_preferred: tuple[int, ...],
             consumable_rejected: tuple[int, ...],
+            quantity_sold_daily: float = 0.0,
         ) -> None:
             row = []
             row.append(GameDataManager.get_item_name(recipe.output.id))
             row.append(profit_per_hour)
+            quantity_sold_per_hour = quantity_sold_daily / (recipe.timeMinutes / 60) if recipe.timeMinutes > 0 else 0.0
+            row.append(quantity_sold_per_hour)
+            row.append(0.0)  # Value column, will be updated later
             row.append(
                 f"{GameDataManager.get_building(recipe.producedIn).specialization.name} {recipe.reqTech}"
             )
@@ -413,12 +469,37 @@ class RecipeWindow(QWidget):
         
         def update_consumables(self, row: int, consumable_preferred: tuple[int, ...], consumable_rejected: tuple[int, ...]) -> None:
             """Update consumables data and text for a specific row."""
-            self.table_data[row][3] = format_consumables(consumable_preferred, consumable_rejected)
+            self.table_data[row][5] = format_consumables(consumable_preferred, consumable_rejected)
             self.consumables_data[row] = (consumable_preferred, consumable_rejected)
             
             # Emit dataChanged for the consumables column
-            consumables_index = self.index(row, 3)
+            consumables_index = self.index(row, 5)
             self.dataChanged.emit(consumables_index, consumables_index)
+        
+        def update_value(self, row: int, value: float) -> None:
+            """Update the value column for a specific row."""
+            self.table_data[row][3] = value
+            value_index = self.index(row, 3)
+            self.dataChanged.emit(value_index, value_index)
+        
+        def update_values_batch(self, values_dict: dict) -> None:
+            """Update multiple value rows at once and emit a single dataChanged signal.
+            
+            Args:
+                values_dict: Dictionary of {row: value} pairs
+            """
+            if not values_dict:
+                return
+            
+            # Update all values in the dictionary
+            for row, value in values_dict.items():
+                self.table_data[row][3] = value
+            
+            # Emit a single dataChanged signal for the entire range
+            if values_dict:
+                first_row = min(values_dict.keys())
+                last_row = max(values_dict.keys())
+                self.dataChanged.emit(self.index(first_row, 3), self.index(last_row, 3))
 
 
     class RecipeTableView(QTableView):
@@ -489,10 +570,17 @@ class RecipeWindow(QWidget):
             self.tech_level_modifier: int = 0
 
         def lessThan(self, source_left: QModelIndex, source_right: QModelIndex) -> bool:
-            if source_left.column() == 1:
+            # Numeric sorting for columns 1 (Profit/hr), 2 (Quantity Sold), and 3 (Value)
+            if source_left.column() in (1, 2, 3):
                 left = self.sourceModel().data(source_left, Qt.ItemDataRole.UserRole)
                 right = self.sourceModel().data(source_right, Qt.ItemDataRole.UserRole)
-                return left < right
+                # Handle -1 values (invalid/missing data)
+                if left == -1 or right == -1:
+                    return left < right
+                try:
+                    return float(left) < float(right)
+                except (TypeError, ValueError):
+                    return left < right
             return super().lessThan(source_left, source_right)
 
         def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
@@ -572,6 +660,7 @@ class RecipeWindow(QWidget):
                 self.checkbox_toggled.emit(self.building, checked)
         
         techSliderChanged = Signal(BuildingSpecialization, int)
+        valueWeightChanged = Signal(float)
 
         def __init__(self, parent: QObject, settings: Settings) -> None:
             super().__init__(parent)
@@ -624,8 +713,42 @@ class RecipeWindow(QWidget):
             )
             self.addItem(building_filter_widget, "Buildings")
 
+            # Value Weight Filter
+            value_weight_widget = QWidget(self)
+            value_weight_layout = QVBoxLayout()
+            value_weight_widget.setLayout(value_weight_layout)
+            
+            value_weight_label = QLabel("Value Weight Factor", self)
+            value_weight_layout.addWidget(value_weight_label)
+            
+            self.value_weight_slider = QSlider(Qt.Orientation.Horizontal, self)
+            self.value_weight_slider.setMinimum(0)
+            self.value_weight_slider.setMaximum(100)
+            self.value_weight_slider.setValue(50)  # Default to 50/50 split
+            self.value_weight_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+            self.value_weight_slider.setTickInterval(10)
+            value_weight_layout.addWidget(self.value_weight_slider)
+            
+            self.value_weight_value_label = QLabel("0.5", self)
+            value_weight_layout.addWidget(self.value_weight_value_label)
+            
+            self.value_weight_slider.valueChanged.connect(self.handle_value_weight_change)
+            
+            self.addItem(value_weight_widget, "Value Weight")
+
             self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
             self.setMinimumWidth(145)
+        
+        @Slot(int)
+        def handle_value_weight_change(self, value: int) -> None:
+            """Handle value weight slider changes. Value ranges from 0-100, converted to 0.0-1.0."""
+            weight = value / 100.0
+            self.value_weight_value_label.setText(f"{weight:.2f}")
+            self.valueWeightChanged.emit(weight)
+        
+        def get_value_weight(self) -> float:
+            """Get the current value weight as a float between 0.0 and 1.0."""
+            return self.value_weight_slider.value() / 100.0
 
 
         @Slot(bool)
@@ -678,6 +801,16 @@ class RecipeWindow(QWidget):
         self.recipe_worker = recipe_worker
         self.main_layout = QHBoxLayout()
         self.setLayout(self.main_layout)
+        
+        # Initialize value recalculation worker thread and debounce timer
+        self.value_recalc_worker = None
+        self.value_recalc_thread = None
+        self.pending_weight = None
+        
+        # Debounce timer: waits 300ms after slider stops moving before recalculating
+        self.value_weight_debounce_timer = QTimer(self)
+        self.value_weight_debounce_timer.setSingleShot(True)
+        self.value_weight_debounce_timer.timeout.connect(self.on_value_weight_debounce_timeout)
 
         # Filter Toolbox
         self.toolbox = RecipeWindow.FilterToolbox(self, self.settings)
@@ -698,12 +831,13 @@ class RecipeWindow(QWidget):
         
         # Apply custom delegate to consumables column
         consumables_delegate = ConsumablesDelegate(self)
-        self.recipe_table_view.setItemDelegateForColumn(3, consumables_delegate)
+        self.recipe_table_view.setItemDelegateForColumn(5, consumables_delegate)
         
         self.toolbox.techSliderChanged.connect(self.handle_tech_slider_change)
         self.toolbox.tech_filter_all_widget.slider.valueChanged.connect(
             self.handle_all_tech_slider_change
         )
+        self.toolbox.valueWeightChanged.connect(self.handle_value_weight_change)
         self.recipe_table_view.setModel(self.recipe_table_proxy_model)
 
         splitter.addWidget(self.recipe_table_view)
@@ -740,6 +874,63 @@ class RecipeWindow(QWidget):
         self.recipe_table_proxy_model.beginFilterChange()
         self.recipe_table_proxy_model.tech_level_modifier = value
         self.recipe_table_proxy_model.endFilterChange()
+    
+    @Slot(float)
+    def handle_value_weight_change(self, weight: float) -> None:
+        """Debounce value weight changes - wait 300ms after slider stops before recalculating."""
+        self.pending_weight = weight
+        # Restart the timer each time slider moves
+        self.value_weight_debounce_timer.start(300)  # 300ms debounce
+    
+    @Slot()
+    def on_value_weight_debounce_timeout(self) -> None:
+        """Called after slider stops moving - now actually recalculate values."""
+        if self.pending_weight is None:
+            return
+        
+        weight = self.pending_weight
+        self.pending_weight = None
+        
+        # Stop any existing recalculation worker
+        if self.value_recalc_thread is not None:
+            try:
+                if self.value_recalc_thread.isRunning():
+                    _logger.debug("Requesting interruption of existing ValueRecalculationWorker")
+                    self.value_recalc_thread.requestInterruption()
+                    # Wait up to 500ms for thread to finish gracefully
+                    if not self.value_recalc_thread.wait(500):
+                        _logger.warning("ValueRecalculationWorker thread did not finish in time")
+            except RuntimeError:
+                # Thread was already deleted, that's fine
+                pass
+            finally:
+                # Clean up old worker and thread
+                self.value_recalc_worker = None
+                self.value_recalc_thread = None
+        
+        # Create new worker and thread
+        self.value_recalc_worker = ValueRecalculationWorker(self.recipe_table_model.table_data, weight)
+        self.value_recalc_thread = QThread(self)
+        
+        # Move worker to thread
+        self.value_recalc_worker.moveToThread(self.value_recalc_thread)
+        
+        # Connect signals - NO deleteLater on thread/worker, we manage lifecycle manually
+        self.value_recalc_thread.started.connect(self.value_recalc_worker.run)
+        self.value_recalc_worker.values_updated.connect(self.handle_values_updated, Qt.ConnectionType.QueuedConnection)
+        self.value_recalc_worker.finished.connect(self.value_recalc_thread.quit)
+        
+        # Start the thread
+        self.value_recalc_thread.start()
+    
+    @Slot(dict)
+    def handle_values_updated(self, values_dict: dict) -> None:
+        """Handle batch value updates from worker thread (runs on main thread).
+        
+        Args:
+            values_dict: Dictionary of {row: value} pairs
+        """
+        self.recipe_table_model.update_values_batch(values_dict)
 
     # Called from recipe worker when a new recipe is added
     @Slot(Recipe)
@@ -765,10 +956,28 @@ class RecipeWindow(QWidget):
                 self.recipe_table_proxy_model.set_building_filter
             )
 
+        # Get quantity sold daily for the recipe output
+        quantity_sold_daily = 0.0
+        try:
+            listing = Exchange.get_listing(recipe.output.id)
+            if listing:
+                quantity_sold_daily = listing.average_quantity_sold_daily
+        except Exception as e:
+            _logger.warning(f"Could not get quantity sold for recipe {recipe.id}: {e}")
         # Update recipe table
         self.recipe_table_model.add_row(
-            recipe, profit_per_hour, consumable_preferred_combination, consumable_rejected_combination
+            recipe, profit_per_hour, consumable_preferred_combination, consumable_rejected_combination, quantity_sold_daily
         )
+        
+        # Calculate and set the value based on current weight
+        row = self.recipe_table_model.rowCount() - 1
+        weight = self.toolbox.get_value_weight()
+        quantity_sold_per_hour = quantity_sold_daily / (recipe.timeMinutes / 60) if recipe.timeMinutes > 0 else 0.0
+        # Apply logarithmic transformation to quantity
+        # Scale by QUANTITY_SOLD_SCALING_FACTOR to bring it into comparable range with profit/hr
+        quantity_sold_log = math.log1p(quantity_sold_per_hour) * QUANTITY_SOLD_SCALING_FACTOR
+        value = (profit_per_hour * weight) + (quantity_sold_log * (1 - weight))
+        self.recipe_table_model.update_value(row, value)
 
     # Called from recipe worker when exchange listings are updated
     @Slot(dict)
@@ -788,7 +997,26 @@ class RecipeWindow(QWidget):
             else:
                 profit_per_hour, consumable_preferred_combination, consumable_rejected_combination = result
 
+            # Get updated quantity sold daily and convert to per-hour
+            quantity_sold_daily = 0.0
+            try:
+                listing = Exchange.get_listing(recipe.output.id)
+                if listing:
+                    quantity_sold_daily = listing.average_quantity_sold_daily / (recipe.timeMinutes / 60) if recipe.timeMinutes > 0 else 0.0
+            except Exception as e:
+                _logger.warning(f"Could not get quantity sold for recipe {recipe.id}: {e}")
+
             self.recipe_table_model.setData(self.recipe_table_model.index(row, 1), profit_per_hour, Qt.ItemDataRole.EditRole)
+            self.recipe_table_model.setData(self.recipe_table_model.index(row, 2), quantity_sold_daily, Qt.ItemDataRole.EditRole)
+            
+            # Update value based on current weight
+            weight = self.toolbox.get_value_weight()
+            # Apply logarithmic transformation to quantity
+            # Scale by QUANTITY_SOLD_SCALING_FACTOR to bring it into comparable range with profit/hr
+            quantity_sold_log = math.log1p(quantity_sold_daily) * QUANTITY_SOLD_SCALING_FACTOR
+            value = (profit_per_hour * weight) + (quantity_sold_log * (1 - weight))
+            self.recipe_table_model.update_value(row, value)
+            
             self.recipe_table_model.update_consumables(row, consumable_preferred_combination, consumable_rejected_combination)
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -796,6 +1024,23 @@ class RecipeWindow(QWidget):
         # TODO: Put this in galaxyTycoonUi.py
         self.settings.tech_level_filters = self.recipe_table_proxy_model.tech_level_filters
         self.settings.tech_level_maximums = self.toolbox.get_tech_level_maximums()
+        
+        # Stop the debounce timer
+        self.value_weight_debounce_timer.stop()
+        
+        # Clean up value recalculation thread
+        if self.value_recalc_thread is not None:
+            try:
+                if self.value_recalc_thread.isRunning():
+                    _logger.debug("Cleaning up ValueRecalculationWorker thread")
+                    self.value_recalc_thread.requestInterruption()
+                    if not self.value_recalc_thread.wait(1000):
+                        _logger.warning("ValueRecalculationWorker thread did not finish, terminating")
+                        self.value_recalc_thread.terminate()
+                        self.value_recalc_thread.wait()
+            except RuntimeError:
+                # Thread was already deleted, that's fine
+                pass
 
 
 
