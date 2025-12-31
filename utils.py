@@ -7,6 +7,7 @@ from typing import Tuple, Union, List
 import logging
 import itertools
 import math
+import hashlib
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 from api.gameData import GameDataManager
@@ -167,12 +168,22 @@ class SpecializationColorDelegate(QStyledItemDelegate):
         self.specialization_colors[specialization_name] = color
     
     def _get_specialization_color(self, specialization_name: str) -> QColor:
-        """Get or assign a color for a specialization using colormap."""
+        """Get or assign a color for a specialization using the BuildingSpecialization enum value."""
         if specialization_name not in self.specialization_colors:
-            # Use hash of specialization name to consistently map to same color
-            hash_value = hash(specialization_name) % 20  # tab20 has 20 colors
+            # Try to get the BuildingSpecialization enum from the name
+            try:
+                from api.models.gameData import BuildingSpecialization
+                specialization_enum = BuildingSpecialization[specialization_name.upper().replace(' ', '_')]
+                color_index = int(specialization_enum) % 20
+            except (KeyError, ValueError):
+                # Fallback to hash-based approach if enum lookup fails
+                import hashlib
+                hash_digest = hashlib.md5(specialization_name.encode()).hexdigest()
+                hash_value = int(hash_digest[:8], 16)
+                color_index = hash_value % 20
+            
             # Get normalized value between 0 and 1
-            normalized_value = hash_value / 20.0
+            normalized_value = color_index / 20.0
             # Get color from colormap
             rgba = self.colormap(normalized_value)
             # Convert to QColor (rgba is tuple of 0-1 values)

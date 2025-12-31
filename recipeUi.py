@@ -54,7 +54,7 @@ from recipeWorker import RecipeWorker
 
 _logger = logging.getLogger(__name__)
 
-QUANTITY_SOLD_SCALING_FACTOR = 200.0  # Scaling factor for quantity sold logarithmic transformation
+QUANTITY_SOLD_SCALING_FACTOR = 40.0  # Scaling factor for quantity sold logarithmic transformation
 
 class ValueRecalculationWorker(QObject):
     """Worker that recalculates values in background thread when weight factor changes."""
@@ -90,7 +90,7 @@ class ValueRecalculationWorker(QObject):
                 
                 # Calculate value: weighted average of profit and log(quantity)
                 # weight is for profit/hr, (1-weight) is for log(quantity)
-                value = (profit_per_hour * self.weight) + (quantity_sold_log * (1 - self.weight))
+                value = (profit_per_hour * (1 - self.weight)) + (quantity_sold_log * self.weight)
                 batch_updates[row] = value
                 
                 # Emit batch when we reach batch_size or at the end
@@ -236,25 +236,41 @@ class RecipeWindow(QWidget):
                     qty_available_index = pd.to_datetime(qty_available_df.index).astype("int64") // 10**9
                     qty_available_data = pd.to_numeric(qty_available_df['total_quantity_available'], errors="coerce")
                     plot_item2 = pg.PlotDataItem(x=np.asarray(qty_available_index), y=np.asarray(qty_available_data), 
-                                                 pen=pg.mkPen(color="#0088ff", width=1), name="Total Qty Available")
+                                                 pen=pg.mkPen(color="#0088ff", width=1, style=Qt.PenStyle.DashLine), name="Total Qty Available")
                     self.p2.addItem(plot_item2)
+
+                    # Add moving average line
+                    qty_available_data.index = pd.to_datetime(qty_available_df.index)
+                    qty_available_ma = qty_available_data.rolling(window='7D').mean()
+                    if not qty_available_ma.empty:
+                        valid_mask = ~qty_available_ma.isna()
+                        if valid_mask.any():
+                            ma_line2 = pg.PlotDataItem(x=np.asarray(qty_available_index)[valid_mask], 
+                                                       y=np.asarray(qty_available_ma.values)[valid_mask], 
+                                                       pen=pg.mkPen(color="#0088ff", width=2), 
+                                                       name="Qty Available MA")
+                            self.p2.addItem(ma_line2)
 
                     # Set Y range for p2 based on data to avoid autorange side effects on p1
                     y_min = np.nanmin(qty_available_data.to_numpy()) if len(qty_available_data) else np.nan
                     y_max = np.nanmax(qty_available_data.to_numpy()) if len(qty_available_data) else np.nan
+                    # Always include 0 on the y-axis
                     if np.isfinite(y_min) and np.isfinite(y_max):
+                        y_min = min(y_min, 0)
+                        y_max = max(y_max, 0)
                         span = y_max - y_min
                         if span == 0:
                             span = max(abs(y_max), 1)
                         pad = span * 0.05
                         self.p2.setYRange(y_min - pad, y_max + pad, padding=0)
 
-                    # Add label at latest point
+                    # Add label at latest point anchored to moving average
                     last_x = qty_available_index[-1]
-                    last_y = qty_available_data.iloc[-1]
-                    label2 = pg.TextItem(text=f"Qty Available: {last_y:,.0f}", color="#0088ff", anchor=(1, 1))
+                    last_y_current = qty_available_data.iloc[-1]
+                    last_y_ma = qty_available_ma.iloc[-1]
+                    label2 = pg.TextItem(text=f"Qty Available: {last_y_current:,.0f}\nMA: {last_y_ma:,.0f}", color="#0088ff", anchor=(1, 1))
                     label2.setZValue(10)
-                    label2.setPos(last_x, last_y)
+                    label2.setPos(last_x, last_y_ma)
                     self.p2.addItem(label2)
                 else:
                     _logger.debug(f"No total quantity available data for recipe {recipe.id}")
@@ -264,25 +280,42 @@ class RecipeWindow(QWidget):
                     qty_sold_index = pd.to_datetime(qty_sold_df.index).astype("int64") // 10**9
                     qty_sold_data = pd.to_numeric(qty_sold_df['quantity_sold'], errors="coerce")
                     plot_item3 = pg.PlotDataItem(x=np.asarray(qty_sold_index), y=np.asarray(qty_sold_data), 
-                                                 pen=pg.mkPen(color="#ff8800", width=1), name="Qty Sold Daily")
+                                                 pen=pg.mkPen(color="#ff8800", width=1, style=Qt.PenStyle.DashLine), name="Qty Sold Daily")
                     self.p3.addItem(plot_item3)
+
+                    # Add moving average line
+                    qty_sold_data.index = pd.to_datetime(qty_sold_df.index)
+                    qty_sold_ma = qty_sold_data.rolling(window='7D').mean()
+                    if not qty_sold_ma.empty:
+                        valid_mask = ~qty_sold_ma.isna()
+                        if valid_mask.any():
+                            ma_line3 = pg.PlotDataItem(x=np.asarray(qty_sold_index)[valid_mask], 
+                                                       y=np.asarray(qty_sold_ma.values)[valid_mask], 
+                                                       pen=pg.mkPen(color="#ff8800", width=2), 
+                                                       name="Qty Sold MA")
+                            self.p3.addItem(ma_line3)
 
                     # Set Y range for p3 based on data to avoid autorange side effects on p1
                     y_min = np.nanmin(qty_sold_data.to_numpy()) if len(qty_sold_data) else np.nan
                     y_max = np.nanmax(qty_sold_data.to_numpy()) if len(qty_sold_data) else np.nan
+                    # Always include 0 on the y-axis
                     if np.isfinite(y_min) and np.isfinite(y_max):
+                        y_min = min(y_min, 0)
+                        y_max = max(y_max, 0)
                         span = y_max - y_min
                         if span == 0:
                             span = max(abs(y_max), 1)
                         pad = span * 0.05
                         self.p3.setYRange(y_min - pad, y_max + pad, padding=0)
 
-                    # Add label at latest point
+                    # Add label at latest point anchored to moving average
                     last_x = qty_sold_index[-1]
-                    last_y = qty_sold_data.iloc[-1]
-                    label3 = pg.TextItem(text=f"Qty Sold: {last_y:,.0f}", color="#ff8800", anchor=(1, 1))
+                    last_y_current = qty_sold_data.iloc[-1]
+                    last_y_ma = qty_sold_ma.iloc[-1]
+                    label3 = pg.TextItem(text=f"Qty Sold: {last_y_current:,.0f}\nMA: {last_y_ma:,.0f}", color="#ff8800", anchor=(1, 1))
                     label3.setZValue(10)
-                    label3.setPos(last_x, last_y)
+                    label3.setPos(last_x, last_y_ma)
+                    self.p3.addItem(label3)
                     self.p3.addItem(label3)
                 else:
                     _logger.debug(f"No quantity sold data for recipe {recipe.id}")
@@ -351,6 +384,14 @@ class RecipeWindow(QWidget):
 
                 # Constrain X to non-negative values with slight padding on the right
                 self.p1.vb.autoRange()
+                
+                # Limit x-axis width to 2 weeks maximum, showing latest data
+                two_weeks_seconds = 14 * 24 * 60 * 60
+                x_min, x_max = self.p1.vb.viewRange()[0]
+                x_range = x_max - x_min
+                if x_range > two_weeks_seconds:
+                    x_min = x_max - two_weeks_seconds
+                    self.p1.vb.setXRange(x_min, x_max, padding=0)
             except Exception as e:
                 _logger.error(f"Error plotting recipe {recipe.id}: {e}", exc_info=True)
 
@@ -551,7 +592,7 @@ class RecipeWindow(QWidget):
             self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.setSortingEnabled(True)
-            self.sortByColumn(1, Qt.SortOrder.DescendingOrder)
+            self.sortByColumn(3, Qt.SortOrder.DescendingOrder)
 
             self.clicked.connect(self.handle_table_clicked)
 
@@ -638,9 +679,8 @@ class RecipeWindow(QWidget):
 
         @Slot(int, bool)
         def set_building_filter(self, building: Building, enabled: bool) -> None:
-            self.beginFilterChange()
             self.building_filters[building.id] = enabled
-            self.endFilterChange()
+            self.invalidateFilter()
 
     class FilterToolbox(QToolBox):
         class TechFilterWidget(QGroupBox):
@@ -918,15 +958,15 @@ class RecipeWindow(QWidget):
     def handle_tech_slider_change(
         self, specialization: BuildingSpecialization, max_tech_level: int
     ) -> None:
-        self.recipe_table_proxy_model.beginFilterChange()
         self.settings.set_tech_level_filter(specialization, max_tech_level)
-        self.recipe_table_proxy_model.endFilterChange()
+        self.recipe_table_proxy_model.invalidateFilter()
+        self.update_delegate_ranges()
 
     @Slot(int)
     def handle_all_tech_slider_change(self, value: int) -> None:
-        self.recipe_table_proxy_model.beginFilterChange()
         self.recipe_table_proxy_model.tech_level_modifier = value
-        self.recipe_table_proxy_model.endFilterChange()
+        self.recipe_table_proxy_model.invalidateFilter()
+        self.update_delegate_ranges()
     
     @Slot(float)
     def handle_value_weight_change(self, weight: float) -> None:
@@ -1079,7 +1119,7 @@ class RecipeWindow(QWidget):
         # Apply logarithmic transformation to quantity
         # Scale by QUANTITY_SOLD_SCALING_FACTOR to bring it into comparable range with profit/hr
         quantity_sold_log = math.log1p(quantity_sold_per_hour) * QUANTITY_SOLD_SCALING_FACTOR
-        value = (profit_per_hour * weight) + (quantity_sold_log * (1 - weight))
+        value = (profit_per_hour * (1 - weight)) + (quantity_sold_log * weight)
         self.recipe_table_model.update_value(row, value)
 
     # Called from recipe worker when exchange listings are updated
@@ -1117,7 +1157,7 @@ class RecipeWindow(QWidget):
             # Apply logarithmic transformation to quantity
             # Scale by QUANTITY_SOLD_SCALING_FACTOR to bring it into comparable range with profit/hr
             quantity_sold_log = math.log1p(quantity_sold_daily) * QUANTITY_SOLD_SCALING_FACTOR
-            value = (profit_per_hour * weight) + (quantity_sold_log * (1 - weight))
+            value = (profit_per_hour * (1 - weight)) + (quantity_sold_log * weight)
             self.recipe_table_model.update_value(row, value)
             
             self.recipe_table_model.update_consumables(row, consumable_preferred_combination, consumable_rejected_combination)
