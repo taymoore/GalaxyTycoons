@@ -108,11 +108,11 @@ class Exchange:
             if listing.id in Exchange.listings:
                 listing.dataframe = Exchange.listings[listing.id].dataframe
             # Add current data point to dataframe
-            listing.dataframe.loc[datetime.today().isoformat()] = {
-                'current_price': listing.current_price,
-                'average_price': listing.average_price,
-                'total_quantity_available': listing.total_quantity_available
-            }
+            listing.dataframe.loc[datetime.today().isoformat(), 'current_price'] = listing.current_price
+            listing.dataframe.loc[datetime.today().isoformat(), 'average_price'] = listing.average_price
+            listing.dataframe.loc[datetime.today().isoformat(), 'total_quantity_available'] = listing.total_quantity_available
+            for price_history_entry in listing.price_history:
+                listing.dataframe.loc[price_history_entry.date + "T00:00:00", 'quantity_sold'] = price_history_entry.quantity_sold
             listing.updated_time = current_time
             Exchange.listings[listing.id] = listing
         _logger.info(

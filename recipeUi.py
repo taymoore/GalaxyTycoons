@@ -63,13 +63,42 @@ class RecipeWindow(QWidget):
             kargs["axisItems"] = {
                 "bottom": pg.DateAxisItem(),
                 "left": RecipeWindow.PriceGraph.FmtAxesItem(orientation="left"),
-                "right": RecipeWindow.PriceGraph.FmtAxesItem(orientation="right"),
             }
             super().__init__(parent, background, plotItem, **kargs)
 
             self.p1 = self.plotItem
             assert isinstance(self.p1, pg.PlotItem)
             self.p1.getAxis("left").setLabel("Profit/hr", color="#00ff00")
+            # Prevent negative X range across all linked viewboxes
+            self.p1.vb.setLimits(xMin=0)
+
+            # Create additional y-axes for quantity data
+            self.p2 = pg.ViewBox()
+            self.p3 = pg.ViewBox()
+            self.p1.scene().addItem(self.p2)
+            self.p1.scene().addItem(self.p3)
+
+            # Ensure secondary viewboxes inherit the non-negative X constraint
+            self.p2.setLimits(xMin=0)
+            self.p3.setLimits(xMin=0)
+            
+            # Link ViewBoxes to the main plot's viewbox geometry
+            self.p2.setGeometry(self.p1.vb.sceneBoundingRect())
+            self.p3.setGeometry(self.p1.vb.sceneBoundingRect())
+            
+            axis2 = pg.AxisItem('right')
+            axis3 = pg.AxisItem('right')
+            self.p1.layout.addItem(axis2, 2, 3)
+            self.p1.layout.addItem(axis3, 2, 4)
+            axis2.linkToView(self.p2)
+            axis3.linkToView(self.p3)
+            axis2.setLabel("Total Qty Available", color="#0088ff")
+            axis3.setLabel("Qty Sold Daily", color="#ff8800")
+            self.p2.setXLink(self.p1)
+            self.p3.setXLink(self.p1)
+            
+            # Update geometry when viewbox changes
+            self.p1.vb.sigStateChanged.connect(self._update_viewbox_geometry)
 
             # Label to display the nearest point's value
             self.label = pg.LabelItem(justify="right", color="#00ff00")
@@ -83,6 +112,11 @@ class RecipeWindow(QWidget):
             # Store plotted data points for nearest-point calculation
             self.data_points = []
             self.listing_price = []
+
+        def _update_viewbox_geometry(self):
+            """Update p2 and p3 geometry when p1 viewbox changes."""
+            self.p2.setGeometry(self.p1.vb.sceneBoundingRect())
+            self.p3.setGeometry(self.p1.vb.sceneBoundingRect())
 
         def wheelEvent(self, ev, axis=None):
             super().wheelEvent(ev)
@@ -109,161 +143,166 @@ class RecipeWindow(QWidget):
             vb.sigRangeChangedManually.emit(mask)
 
         @Slot(Recipe)
+        @Slot(Recipe)
         def plot_recipe(self, recipe: Recipe) -> None:
-            self.p1.clear()
-            self.p1.vb.enableAutoRange()
-
-            listing = Exchange.get_listing(recipe.output.id)
-            df = listing.dataframe.copy()
-            df.sort_index(inplace=True)
-
-            # Prepare average price data (drop NaN values)
-            avg_price_df = df[['average_price']].dropna()
-            output_average_price_index = (
-                pd.to_datetime(avg_price_df.index).astype("int64")
-                // 10**9
-            )
-            output_average_price = (
-                pd.to_numeric(avg_price_df["average_price"], errors="coerce")
-                * recipe.output.am
-                / (100 * recipe.timeMinutes / 60)
-            )
-            
-            # Prepare current price data (drop NaN values)
-            curr_price_df = df[['current_price']].dropna()
-            output_current_price_index = (
-                pd.to_datetime(curr_price_df.index).astype("int64")
-                // 10**9
-            )
-            output_current_price = (
-                pd.to_numeric(curr_price_df["current_price"], errors="coerce")
-                * recipe.output.am
-                / (100 * recipe.timeMinutes / 60)
-            )
-
-            # Store data points for nearest-point calculation
-            self.data_points = list(zip(output_average_price_index, output_average_price))
-            self.listing_price = avg_price_df["average_price"].to_numpy() / 100
-
-            # Plot the data
-            self.p1.plot(
-                x=np.asarray(output_average_price_index),
-                y=np.asarray(output_average_price),
-                pen=pg.mkPen(color="#00ff00", width=2),
-                name="Average Profit",
-            )
-            self.p1.plot(
-                x=np.asarray(output_current_price_index),
-                y=np.asarray(output_current_price),
-                pen=pg.mkPen(color="#00ff00", width=2, style=Qt.PenStyle.DashLine),
-                name="Current Profit",
-            )
-            # self.label.setText(
-            #     f"Market Price: {self.listing_price[-1]:,.2f}<br>Profit/hr: {y_data.iloc[-1]:,.2f}<br>Time: {pd.to_datetime(x_data[-1], unit='s')}"
-            # )
-            # self.label.setPos(
-            #     pg.Point(x_data[-1], y_data.iloc[-1])
-            #     - self.label.boundingRect().topRight()
-            # )
-
-            # Plot each ingredient price
-            ingredient_average_price_subtotal = None
-            ingredient_current_price_subtotal = None
-            colormap = cm.get_cmap("tab10")
-            num_ingredients = len(recipe.inputs)
-            ingredient_colors = [
-                mcolors.to_hex(colormap(i / num_ingredients))
-                for i in range(num_ingredients)
-            ]
-            for material_idx, material_amount in enumerate(recipe.inputs):
-                material_listing = Exchange.get_listing(material_amount.id)
-                material_df = material_listing.dataframe.copy()
-                material_df.sort_index(inplace=True)
-                
-                # Prepare average price data (drop NaN values)
-                input_average_price = material_df[["average_price"]].dropna().copy()
-                input_average_price.index = (
-                    pd.to_datetime(input_average_price.index).astype("int64") // 10**9
-                )
-                input_average_price["price"] = (
-                    input_average_price["average_price"]
-                    * material_amount.am
-                    / (100 * recipe.timeMinutes / 60)
-                )
-                
-                # Prepare current price data (drop NaN values)
-                input_current_price = material_df[["current_price"]].dropna().copy()
-                input_current_price.index = (
-                    pd.to_datetime(input_current_price.index).astype("int64") // 10**9
-                )
-                input_current_price["price"] = (
-                    input_current_price["current_price"]
-                    * material_amount.am
-                    / (100 * recipe.timeMinutes / 60)
-                )
-                # _logger.debug(f"Plotting ingredient {material_listing.name} ({material_amount.id}). Latest average price history: {material_df['average_price'].dropna().iloc[-1]/100:.2f} if len(material_df['average_price'].dropna()) > 0 else 'N/A'.")
-
-                # Assign a unique color to each ingredient
-                ingredient_color = ingredient_colors[material_idx]
-
-                self.p1.plot(
-                    x=input_average_price.index.to_numpy(),
-                    y=input_average_price["price"].to_numpy(),
-                    pen=pg.mkPen(color=ingredient_color, width=1),
-                    name=f"Average Ingredient: {material_listing.name}",
-                )
-                self.p1.plot(
-                    x=input_current_price.index.to_numpy(),
-                    y=input_current_price["price"].to_numpy(),
-                    pen=pg.mkPen(color=ingredient_color, width=1, style=Qt.PenStyle.DashLine),
-                    name=f"Current Ingredient: {material_listing.name}",
-                )
-
-                label = pg.TextItem(
-                    text=f"{material_listing.name}\nAv Cost/hr: {input_average_price['price'].iloc[-1]:,.2f}\nCurr Cost/hr: {input_current_price['price'].iloc[-1]:,.2f}",
-                    color=ingredient_color,
-                    anchor=(1, 1),
-                )
-                label.setPos(input_current_price.index[-1], input_current_price["price"].iloc[-1])
-                self.p1.addItem(label)
-
-                ingredient_average_price_subtotal = (
-                    align_add(ingredient_average_price_subtotal, input_average_price["price"])
-                    if ingredient_average_price_subtotal is not None
-                    else input_average_price["price"]
-                )
-                ingredient_current_price_subtotal = (
-                    align_add(ingredient_current_price_subtotal, input_current_price["price"])
-                    if ingredient_current_price_subtotal is not None
-                    else input_current_price["price"]
-                )
-
-            ingredient_average_price_subtotal.dropna(inplace=True)
-            self.p1.plot(
-                x=ingredient_average_price_subtotal.index.to_numpy(),
-                y=ingredient_average_price_subtotal.to_numpy(),
-                pen=pg.mkPen(color="#ff0000", width=2),
-                name="Average Ingredient Total",
-            )
-            ingredient_current_price_subtotal.dropna(inplace=True)
-            self.p1.plot(
-                x=ingredient_current_price_subtotal.index.to_numpy(),
-                y=ingredient_current_price_subtotal.to_numpy(),
-                pen=pg.mkPen(color="#ff0000", width=2, style=Qt.PenStyle.DashLine),
-                name="Current Ingredient Total",
-            )
-            label = pg.TextItem(
-                text=f"Average Cost/hr: {ingredient_average_price_subtotal.iloc[-1]:,.2f}\nCurrent Cost/hr: {ingredient_current_price_subtotal.iloc[-1]:,.2f}",
-                color="#ff0000",
-                anchor=(1, 1),
-            )
-            label.setPos(ingredient_average_price_subtotal.index[-1], ingredient_average_price_subtotal.iloc[-1])
-            self.p1.addItem(label)
-
             try:
+                self.p1.clear()
+                self.p2.clear()
+                self.p3.clear()
+                self.p1.vb.enableAutoRange()
+                # p2/p3 use manual Y ranges derived from their own data; X is linked to p1
+
+                listing = Exchange.get_listing(recipe.output.id)
+                if not listing or listing.dataframe.empty:
+                    _logger.warning(f"No listing data available for recipe output {recipe.output.id}")
+                    return
+
+                df = listing.dataframe.copy()
+                df.sort_index(inplace=True)
+
+                avg_price_df = df[['average_price']].dropna()
+                if avg_price_df.empty:
+                    _logger.warning(f"No average price data for recipe {recipe.id}")
+                    return
+
+                output_average_price_index = pd.to_datetime(avg_price_df.index).astype("int64") // 10**9
+                output_average_price = pd.to_numeric(avg_price_df["average_price"], errors="coerce") * recipe.output.am / (100 * recipe.timeMinutes / 60)
+
+                curr_price_df = df[['current_price']].dropna()
+                output_current_price_index = pd.to_datetime(curr_price_df.index).astype("int64") // 10**9
+                output_current_price = pd.to_numeric(curr_price_df["current_price"], errors="coerce") * recipe.output.am / (100 * recipe.timeMinutes / 60)
+
+                self.data_points = list(zip(output_average_price_index, output_average_price))
+                self.listing_price = avg_price_df["average_price"].to_numpy() / 100
+
+                self.p1.plot(x=np.asarray(output_average_price_index), y=np.asarray(output_average_price), 
+                             pen=pg.mkPen(color="#00ff00", width=2), name="Average Profit")
+
+                self.p1.plot(x=np.asarray(output_current_price_index), y=np.asarray(output_current_price), 
+                             pen=pg.mkPen(color="#00ff00", width=1, style=Qt.PenStyle.DashLine), name="Current Profit")
+
+                qty_available_df = df[['total_quantity_available']].dropna()
+                if not qty_available_df.empty:
+                    qty_available_index = pd.to_datetime(qty_available_df.index).astype("int64") // 10**9
+                    qty_available_data = pd.to_numeric(qty_available_df['total_quantity_available'], errors="coerce")
+                    plot_item2 = pg.PlotDataItem(x=np.asarray(qty_available_index), y=np.asarray(qty_available_data), 
+                                                 pen=pg.mkPen(color="#0088ff", width=1), name="Total Qty Available")
+                    self.p2.addItem(plot_item2)
+
+                    # Set Y range for p2 based on data to avoid autorange side effects on p1
+                    y_min = np.nanmin(qty_available_data.to_numpy()) if len(qty_available_data) else np.nan
+                    y_max = np.nanmax(qty_available_data.to_numpy()) if len(qty_available_data) else np.nan
+                    if np.isfinite(y_min) and np.isfinite(y_max):
+                        span = y_max - y_min
+                        if span == 0:
+                            span = max(abs(y_max), 1)
+                        pad = span * 0.05
+                        self.p2.setYRange(y_min - pad, y_max + pad, padding=0)
+
+                    # Add label at latest point
+                    last_x = qty_available_index[-1]
+                    last_y = qty_available_data.iloc[-1]
+                    label2 = pg.TextItem(text=f"Qty Available: {last_y:,.0f}", color="#0088ff", anchor=(1, 1))
+                    label2.setZValue(10)
+                    label2.setPos(last_x, last_y)
+                    self.p2.addItem(label2)
+                else:
+                    _logger.debug(f"No total quantity available data for recipe {recipe.id}")
+
+                qty_sold_df = df[['quantity_sold']].dropna() if 'quantity_sold' in df.columns else pd.DataFrame()
+                if not qty_sold_df.empty:
+                    qty_sold_index = pd.to_datetime(qty_sold_df.index).astype("int64") // 10**9
+                    qty_sold_data = pd.to_numeric(qty_sold_df['quantity_sold'], errors="coerce")
+                    plot_item3 = pg.PlotDataItem(x=np.asarray(qty_sold_index), y=np.asarray(qty_sold_data), 
+                                                 pen=pg.mkPen(color="#ff8800", width=1), name="Qty Sold Daily")
+                    self.p3.addItem(plot_item3)
+
+                    # Set Y range for p3 based on data to avoid autorange side effects on p1
+                    y_min = np.nanmin(qty_sold_data.to_numpy()) if len(qty_sold_data) else np.nan
+                    y_max = np.nanmax(qty_sold_data.to_numpy()) if len(qty_sold_data) else np.nan
+                    if np.isfinite(y_min) and np.isfinite(y_max):
+                        span = y_max - y_min
+                        if span == 0:
+                            span = max(abs(y_max), 1)
+                        pad = span * 0.05
+                        self.p3.setYRange(y_min - pad, y_max + pad, padding=0)
+
+                    # Add label at latest point
+                    last_x = qty_sold_index[-1]
+                    last_y = qty_sold_data.iloc[-1]
+                    label3 = pg.TextItem(text=f"Qty Sold: {last_y:,.0f}", color="#ff8800", anchor=(1, 1))
+                    label3.setZValue(10)
+                    label3.setPos(last_x, last_y)
+                    self.p3.addItem(label3)
+                else:
+                    _logger.debug(f"No quantity sold data for recipe {recipe.id}")
+
+                ingredient_average_price_subtotal = None
+                ingredient_current_price_subtotal = None
+                colormap = cm.get_cmap("tab10")
+                num_ingredients = len(recipe.inputs)
+                ingredient_colors = [mcolors.to_hex(colormap(i / num_ingredients)) for i in range(num_ingredients)]
+                
+                for material_idx, material_amount in enumerate(recipe.inputs):
+                    material_listing = Exchange.get_listing(material_amount.id)
+                    if not material_listing or material_listing.dataframe.empty:
+                        _logger.debug(f"No data for ingredient {material_amount.id}")
+                        continue
+                    
+                    material_df = material_listing.dataframe.copy()
+                    material_df.sort_index(inplace=True)
+                    
+                    input_average_price = material_df[["average_price"]].dropna().copy()
+                    if input_average_price.empty:
+                        continue
+                    input_average_price.index = pd.to_datetime(input_average_price.index).astype("int64") // 10**9
+                    input_average_price["price"] = input_average_price["average_price"] * material_amount.am / (100 * recipe.timeMinutes / 60)
+                    
+                    input_current_price = material_df[["current_price"]].dropna().copy()
+                    if input_current_price.empty:
+                        continue
+                    input_current_price.index = pd.to_datetime(input_current_price.index).astype("int64") // 10**9
+                    input_current_price["price"] = input_current_price["current_price"] * material_amount.am / (100 * recipe.timeMinutes / 60)
+
+                    ingredient_color = ingredient_colors[material_idx]
+
+                    self.p1.plot(x=input_average_price.index.to_numpy(), y=input_average_price["price"].to_numpy(), 
+                                 pen=pg.mkPen(color=ingredient_color, width=1), name=f"Average Ingredient: {material_listing.name}")
+                    self.p1.plot(x=input_current_price.index.to_numpy(), y=input_current_price["price"].to_numpy(), 
+                                 pen=pg.mkPen(color=ingredient_color, width=1, style=Qt.PenStyle.DashLine), name=f"Current Ingredient: {material_listing.name}")
+
+                    if not input_current_price.empty:
+                        label = pg.TextItem(text=f"{material_listing.name}\nAv Cost/hr: {input_average_price['price'].iloc[-1]:,.2f}\nCurr Cost/hr: {input_current_price['price'].iloc[-1]:,.2f}", 
+                                            color=ingredient_color, anchor=(1, 1))
+                        label.setPos(input_current_price.index[-1], input_current_price["price"].iloc[-1])
+                        self.p1.addItem(label)
+
+                    ingredient_average_price_subtotal = (align_add(ingredient_average_price_subtotal, input_average_price["price"]) 
+                                                         if ingredient_average_price_subtotal is not None else input_average_price["price"])
+                    ingredient_current_price_subtotal = (align_add(ingredient_current_price_subtotal, input_current_price["price"]) 
+                                                         if ingredient_current_price_subtotal is not None else input_current_price["price"])
+
+                if ingredient_average_price_subtotal is not None:
+                    ingredient_average_price_subtotal.dropna(inplace=True)
+                    if not ingredient_average_price_subtotal.empty:
+                        self.p1.plot(x=ingredient_average_price_subtotal.index.to_numpy(), y=ingredient_average_price_subtotal.to_numpy(), 
+                                     pen=pg.mkPen(color="#ff0000", width=2), name="Average Ingredient Total")
+                
+                if ingredient_current_price_subtotal is not None:
+                    ingredient_current_price_subtotal.dropna(inplace=True)
+                    if not ingredient_current_price_subtotal.empty:
+                        self.p1.plot(x=ingredient_current_price_subtotal.index.to_numpy(), y=ingredient_current_price_subtotal.to_numpy(), 
+                                     pen=pg.mkPen(color="#ff0000", width=1, style=Qt.PenStyle.DashLine), name="Current Ingredient Total")
+                        if len(ingredient_current_price_subtotal) > 0:
+                            label = pg.TextItem(text=f"Average Cost/hr: {ingredient_average_price_subtotal.iloc[-1]:,.2f}\nCurrent Cost/hr: {ingredient_current_price_subtotal.iloc[-1]:,.2f}", 
+                                                color="#ff0000", anchor=(1, 1))
+                            label.setPos(ingredient_current_price_subtotal.index[-1], ingredient_current_price_subtotal.iloc[-1])
+                            self.p1.addItem(label)
+
+                # Constrain X to non-negative values with slight padding on the right
                 self.p1.vb.autoRange()
             except Exception as e:
-                _logger.error(f"Error during autoRange: {e}")
+                _logger.error(f"Error plotting recipe {recipe.id}: {e}", exc_info=True)
 
         def on_mouse_moved(self, pos):
             # Convert mouse position to plot coordinates
@@ -749,9 +788,6 @@ class RecipeWindow(QWidget):
             else:
                 profit_per_hour, consumable_preferred_combination, consumable_rejected_combination = result
 
-            if profit_per_hour < 0:
-                _logger.debug(f"Recipe '{GameDataManager.get_item_name(recipe.output.id)}' now has negative profit per hour: {profit_per_hour:.2f}.")
-                _logger.debug(f"Preferred consumables: {consumable_preferred_combination}, Rejected consumables: {consumable_rejected_combination}.")
             self.recipe_table_model.setData(self.recipe_table_model.index(row, 1), profit_per_hour, Qt.ItemDataRole.EditRole)
             self.recipe_table_model.update_consumables(row, consumable_preferred_combination, consumable_rejected_combination)
 

@@ -22,7 +22,7 @@ class Listing(BaseModel):
     name: str = Field(alias="matName")
     current_price: int = Field(alias="currentPrice")
     dataframe: pd.DataFrame = Field(
-        default_factory=lambda: pd.DataFrame(columns=["current_price", "average_price", "total_quantity_available"])
+        default_factory=lambda: pd.DataFrame(columns=["current_price", "average_price", "total_quantity_available", "quantity_sold"])
     )
     average_price: int = Field(alias="avgPrice")
     updated_time: datetime = Field(default_factory=datetime.now)
