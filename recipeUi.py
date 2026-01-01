@@ -54,7 +54,7 @@ from recipeWorker import RecipeWorker
 
 _logger = logging.getLogger(__name__)
 
-QUANTITY_SOLD_SCALING_FACTOR = 40.0  # Scaling factor for quantity sold logarithmic transformation
+QUANTITY_SOLD_SCALING_FACTOR = 10.0  # Scaling factor for quantity sold logarithmic transformation
 
 class ValueRecalculationWorker(QObject):
     """Worker that recalculates values in background thread when weight factor changes."""
@@ -315,7 +315,6 @@ class RecipeWindow(QWidget):
                     label3 = pg.TextItem(text=f"Qty Sold: {last_y_current:,.0f}\nMA: {last_y_ma:,.0f}", color="#ff8800", anchor=(1, 0))
                     label3.setZValue(10)
                     label3.setPos(last_x, last_y_ma)
-                    self.p3.addItem(label3)
                     self.p3.addItem(label3)
                 else:
                     _logger.debug(f"No quantity sold data for recipe {recipe.id}")
@@ -592,7 +591,6 @@ class RecipeWindow(QWidget):
             self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.setSortingEnabled(True)
-            self.sortByColumn(3, Qt.SortOrder.DescendingOrder)
 
             self.clicked.connect(self.handle_table_clicked)
 
@@ -641,7 +639,6 @@ class RecipeWindow(QWidget):
             super().__init__(parent)
             self.setDynamicSortFilter(True)
             self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-            self.sort(1, Qt.SortOrder.DescendingOrder)
             self.tech_level_filters: Dict[BuildingSpecialization, int] = settings.tech_level_filters if settings else {}
             self.building_filters: Dict[int, bool] = {}
             self.tech_level_modifier: int = 0
@@ -932,6 +929,7 @@ class RecipeWindow(QWidget):
         )
         self.toolbox.valueWeightChanged.connect(self.handle_value_weight_change)
         self.recipe_table_view.setModel(self.recipe_table_proxy_model)
+        self.recipe_table_proxy_model.sort(3, Qt.SortOrder.DescendingOrder)
 
         splitter.addWidget(self.recipe_table_view)
 
