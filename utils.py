@@ -87,10 +87,11 @@ class GradientColorDelegate(QStyledItemDelegate):
     Higher values are colored green, lower values are colored red.
     """
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, value_transform=None):
         super().__init__(parent)
         self.min_value = 0.0
         self.max_value = 1.0
+        self.value_transform = value_transform  # Optional function to transform values before color calculation
     
     def set_value_range(self, min_value: float, max_value: float) -> None:
         """Set the min and max values for the gradient range."""
@@ -140,6 +141,10 @@ class GradientColorDelegate(QStyledItemDelegate):
         except (TypeError, ValueError):
             return super().paint(painter, option, index)
         
+        # Apply value transformation if provided
+        if self.value_transform is not None:
+            numeric_value = self.value_transform(numeric_value)
+        
         # Get the gradient color for this value
         color = self._get_gradient_color(numeric_value)
         
@@ -172,8 +177,8 @@ class SpecializationColorDelegate(QStyledItemDelegate):
         if specialization_name not in self.specialization_colors:
             # Try to get the BuildingSpecialization enum from the name
             try:
-                from api.models.gameData import BuildingSpecialization
-                specialization_enum = BuildingSpecialization[specialization_name.upper().replace(' ', '_')]
+                from api.models.gameData import Specialization
+                specialization_enum = Specialization[specialization_name.upper().replace(' ', '_')]
                 color_index = int(specialization_enum) % 20
             except (KeyError, ValueError):
                 # Fallback to hash-based approach if enum lookup fails

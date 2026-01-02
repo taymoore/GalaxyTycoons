@@ -2,14 +2,13 @@ from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
 from enum import IntEnum
 
-
 class RecipeType(IntEnum):
     EXTRACTION = 1
     PRODUCTION = 2
     FARMING = 3
 
 
-class BuildingSpecialization(IntEnum):
+class Specialization(IntEnum):
     NONE = 0
     CONSTRUCTION = 1
     MANUFACTURING = 2
@@ -73,7 +72,7 @@ class Building(BaseModel):
         List[int]
     ]  # Quantity of each type: [Worker, Technician, Engineer, Scientist]
     workersHousing: Optional[List[int]]  # Housing capacity by type
-    specialization: BuildingSpecialization
+    specialization: Specialization
     tier: int
     requiredResearch: Optional[int]  # Unused
     recipesIds: Optional[List[int]]  # Recipe IDs this building can produce

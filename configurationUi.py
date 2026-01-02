@@ -50,7 +50,7 @@ import matplotlib.cm as cm
 
 from utils import align_add, find_best_recipe_for_building, ConsumablesDelegate, format_consumables
 from api.gameData import GameDataManager
-from api.models.gameData import Recipe, BuildingSpecialization, Building, WorkerType
+from api.models.gameData import Recipe, Specialization, Building, WorkerType
 from api.exchange import Exchange
 from api.models.exchange import Listing
 from recipeWorker import RecipeWorker

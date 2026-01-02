@@ -5,7 +5,7 @@ from typing import Dict, List, Any
 from PySide6.QtCore import QObject, Slot
 from pydantic import BaseModel, Field
 
-from api.models.gameData import BuildingSpecialization
+from api.models.gameData import Specialization
 
 CACHE_FILENAME = "settings.pkl"
 CACHE_DIR = ".data"
@@ -14,8 +14,8 @@ _logger = logging.getLogger(__name__)
 
 class Settings(QObject):
     class SettingsData(BaseModel):
-        tech_level_filters: Dict[BuildingSpecialization, int] = Field(default_factory=dict)
-        tech_level_maximums: Dict[BuildingSpecialization, int] = Field(default_factory=dict)
+        tech_level_filters: Dict[Specialization, int] = Field(default_factory=dict)
+        tech_level_maximums: Dict[Specialization, int] = Field(default_factory=dict)
         configurations: List[Dict[str, Any]] = Field(default_factory=list)
     
     def __init__(self, parent=None):
@@ -23,19 +23,19 @@ class Settings(QObject):
         self._data = self._load_settings()
     
     @property
-    def tech_level_filters(self) -> Dict[BuildingSpecialization, int]:
+    def tech_level_filters(self) -> Dict[Specialization, int]:
         return self._data.tech_level_filters
     
     @tech_level_filters.setter
-    def tech_level_filters(self, value: Dict[BuildingSpecialization, int]):
+    def tech_level_filters(self, value: Dict[Specialization, int]):
         self._data.tech_level_filters = value
     
     @property
-    def tech_level_maximums(self) -> Dict[BuildingSpecialization, int]:
+    def tech_level_maximums(self) -> Dict[Specialization, int]:
         return self._data.tech_level_maximums
     
     @tech_level_maximums.setter
-    def tech_level_maximums(self, value: Dict[BuildingSpecialization, int]):
+    def tech_level_maximums(self, value: Dict[Specialization, int]):
         self._data.tech_level_maximums = value
     
     @property
@@ -46,16 +46,16 @@ class Settings(QObject):
     def configurations(self, value: List[Dict[str, Any]]):
         self._data.configurations = value
 
-    @Slot(BuildingSpecialization, int)
+    @Slot(Specialization, int)
     def set_tech_level_filter(
-        self, specialization: BuildingSpecialization, tech_level: int
+        self, specialization: Specialization, tech_level: int
     ) -> None:
         self._data.tech_level_filters[specialization] = tech_level
     
     @Slot(list, list)
     def set_tech_level_filters(
         self,
-        specializations: List[BuildingSpecialization],
+        specializations: List[Specialization],
         tech_levels: List[int]
     ) -> None:
         for specialization, tech_level in zip(specializations, tech_levels):

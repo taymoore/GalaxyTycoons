@@ -47,7 +47,7 @@ import matplotlib.cm as cm
 from settings import Settings
 from utils import align_add, calculate_profit_and_consumables, ConsumablesDelegate, GradientColorDelegate, SpecializationColorDelegate, format_consumables
 from api.gameData import GameDataManager
-from api.models.gameData import Recipe, BuildingSpecialization, Building, WorkerType
+from api.models.gameData import Recipe, Specialization, Building, WorkerType
 from api.exchange import Exchange
 from api.models.exchange import Listing
 from recipeWorker import RecipeWorker
@@ -483,7 +483,7 @@ class RecipeWindow(QWidget):
             row = []
             row.append(GameDataManager.get_item_name(recipe.output.id))
             row.append(profit_per_hour)
-            quantity_sold_per_hour = quantity_sold_daily / (recipe.timeMinutes / 60) if recipe.timeMinutes > 0 else 0.0
+            quantity_sold_per_hour = quantity_sold_daily * (recipe.timeMinutes / 60) if recipe.timeMinutes > 0 else 0.0
             row.append(quantity_sold_per_hour)
             row.append(0.0)  # Value column, will be updated later
             row.append(
@@ -639,7 +639,7 @@ class RecipeWindow(QWidget):
             super().__init__(parent)
             self.setDynamicSortFilter(True)
             self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-            self.tech_level_filters: Dict[BuildingSpecialization, int] = settings.tech_level_filters if settings else {}
+            self.tech_level_filters: Dict[Specialization, int] = settings.tech_level_filters if settings else {}
             self.building_filters: Dict[int, bool] = {}
             self.tech_level_modifier: int = 0
 
@@ -732,7 +732,7 @@ class RecipeWindow(QWidget):
             def handle_toggle(self, checked: bool) -> None:
                 self.checkbox_toggled.emit(self.building, checked)
         
-        techSliderChanged = Signal(BuildingSpecialization, int)
+        techSliderChanged = Signal(Specialization, int)
         valueWeightChanged = Signal(float)
 
         def __init__(self, parent: QObject, settings: Settings) -> None:
@@ -750,13 +750,13 @@ class RecipeWindow(QWidget):
             self.tech_filter_all_widget.slider.setMaximum(19)
             tech_filter_layout.addWidget(self.tech_filter_all_widget)
             self.tech_widgets: Dict[
-                BuildingSpecialization, RecipeWindow.FilterToolbox.TechFilterWidget
+                Specialization, RecipeWindow.FilterToolbox.TechFilterWidget
             ] = {}
-            for specialization in BuildingSpecialization:
-                if specialization == BuildingSpecialization.NONE or specialization == BuildingSpecialization.RESOURCE_EXTRACTION:
+            for specialization in Specialization:
+                if specialization == Specialization.NONE or specialization == Specialization.RESOURCE_EXTRACTION:
                     continue
                 tech_widget = RecipeWindow.FilterToolbox.TechFilterWidget(
-                    BuildingSpecialization(specialization).name.title(), self
+                    Specialization(specialization).name.title(), self
                 )
                 self.tech_widgets[specialization] = tech_widget
                 tech_filter_layout.addWidget(tech_widget)
@@ -853,12 +853,12 @@ class RecipeWindow(QWidget):
 
         @Slot()
         def handle_tech_level_change(
-            self, specialization: BuildingSpecialization, max_tech_level: int
+            self, specialization: Specialization, max_tech_level: int
         ) -> None:
             self.tech_widgets[specialization].set_maximum(max_tech_level)
 
-        def get_tech_level_maximums(self) -> Dict[BuildingSpecialization, int]:
-            tech_level_maximums: Dict[BuildingSpecialization, int] = {}
+        def get_tech_level_maximums(self) -> Dict[Specialization, int]:
+            tech_level_maximums: Dict[Specialization, int] = {}
             for specialization, tech_widget in self.tech_widgets.items():
                 tech_level_maximums[specialization] = tech_widget.slider.maximum()
             return tech_level_maximums
@@ -908,7 +908,11 @@ class RecipeWindow(QWidget):
         
         # Apply gradient color delegates to profit and quantity columns
         self.profit_delegate = GradientColorDelegate(self)
-        self.quantity_delegate = GradientColorDelegate(self)
+        # Quantity delegate uses log transformation to match the range calculation
+        self.quantity_delegate = GradientColorDelegate(
+            self, 
+            value_transform=lambda x: math.log1p(x) * QUANTITY_SOLD_SCALING_FACTOR
+        )
         self.recipe_table_view.setItemDelegateForColumn(1, self.profit_delegate)
         self.recipe_table_view.setItemDelegateForColumn(2, self.quantity_delegate)
         
@@ -952,9 +956,9 @@ class RecipeWindow(QWidget):
         )
 
     # Called from toolbox when a tech slider is changed
-    @Slot(BuildingSpecialization, int)
+    @Slot(Specialization, int)
     def handle_tech_slider_change(
-        self, specialization: BuildingSpecialization, max_tech_level: int
+        self, specialization: Specialization, max_tech_level: int
     ) -> None:
         self.settings.set_tech_level_filter(specialization, max_tech_level)
         self.recipe_table_proxy_model.invalidateFilter()
@@ -1113,7 +1117,7 @@ class RecipeWindow(QWidget):
         # Calculate and set the value based on current weight
         row = self.recipe_table_model.rowCount() - 1
         weight = self.toolbox.get_value_weight()
-        quantity_sold_per_hour = quantity_sold_daily / (recipe.timeMinutes / 60) if recipe.timeMinutes > 0 else 0.0
+        quantity_sold_per_hour = quantity_sold_daily * (recipe.timeMinutes / 60) if recipe.timeMinutes > 0 else 0.0
         # Apply logarithmic transformation to quantity
         # Scale by QUANTITY_SOLD_SCALING_FACTOR to bring it into comparable range with profit/hr
         quantity_sold_log = math.log1p(quantity_sold_per_hour) * QUANTITY_SOLD_SCALING_FACTOR
@@ -1143,7 +1147,7 @@ class RecipeWindow(QWidget):
             try:
                 listing = Exchange.get_listing(recipe.output.id)
                 if listing:
-                    quantity_sold_daily = listing.average_quantity_sold_daily / (recipe.timeMinutes / 60) if recipe.timeMinutes > 0 else 0.0
+                    quantity_sold_daily = listing.average_quantity_sold_daily * (recipe.timeMinutes / 60) if recipe.timeMinutes > 0 else 0.0
             except Exception as e:
                 _logger.warning(f"Could not get quantity sold for recipe {recipe.id}: {e}")
 

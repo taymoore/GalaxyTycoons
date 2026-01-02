@@ -2,7 +2,7 @@ from typing import List, Dict
 import logging
 from PySide6.QtCore import QObject, Slot, Signal, QThread, QRunnable, QSemaphore
 
-from api.models.gameData import Recipe, BuildingSpecialization, RecipeType, Worker, WorkerType
+from api.models.gameData import Recipe, Specialization, RecipeType, Worker, WorkerType
 from api.gameData import GameDataManager
 from api.exchange import Exchange
 from api.models.exchange import Listing
@@ -15,13 +15,13 @@ _logger = logging.getLogger(__name__)
 class RecipeWorker(QObject):
     recipe_added_signal = Signal(Recipe)
     exchange_updated_signal = Signal()
-    tech_level_change_signal = Signal(BuildingSpecialization, int)
+    tech_level_change_signal = Signal(Specialization, int)
     finished = Signal()
 
     def __init__(self, recipies=List[Recipe], tech_level_maximum=None) -> None:
         self.recipies = recipies
         self.wake_semaphore = QSemaphore(0)
-        self.tech_level_maximum: Dict[BuildingSpecialization, int] = (
+        self.tech_level_maximum: Dict[Specialization, int] = (
             {} if tech_level_maximum is None else tech_level_maximum
         )
         super().__init__(objectName="RecipeWorker")
