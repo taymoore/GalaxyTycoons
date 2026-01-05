@@ -5,11 +5,9 @@ from typing import Optional, Type, TypeVar
 
 import requests
 from dotenv import load_dotenv
-from PySide6.QtCore import QSemaphore, QThread, Signal
+from PySide6.QtCore import QObject, QSemaphore, Signal, Slot
 
 from api.models.company import Company
-
-UPDATE_INTERVAL_MS = 1000 * 60 * 15  # 15 minutes
 
 # Load environment variables from .env file
 load_dotenv()
@@ -18,8 +16,8 @@ _logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-class CompanyDataManager(QThread):
-    """Worker thread that fetches company data without blocking the UI."""
+class CompanyDataManager(QObject):
+    """Manager that fetches company data on demand via slot."""
 
     company_loaded = Signal(Company)
     error = Signal(str)
@@ -35,25 +33,28 @@ class CompanyDataManager(QThread):
         self.retry_attempts = retry_attempts
         self.base_delay_seconds = base_delay_seconds
         self.company: Optional[Company] = None
+        self._stop_requested = False
+        self._wake_semaphore = QSemaphore(0)
+
+    @Slot()
+    def fetch_company(self) -> None:
+        """Fetch company data on demand."""
+        try:
+            company = self._fetch_with_retry(
+                "https://api.g2.galactictycoons.com/public/company",
+                Company
+            )
+            if company:
+                self.company = company
+                self.company_loaded.emit(company)
+        except Exception as exc:  # noqa: BLE001
+            _logger.error("Error fetching company data: %s", exc)
+            self.error.emit(str(exc))
 
     def request_stop(self) -> None:
+        """Request a stop; will interrupt any ongoing waits in fetch operations."""
+        self._stop_requested = True
         self._wake_semaphore.release(1)
-
-    def run(self) -> None:
-        while not QThread.currentThread().isInterruptionRequested():
-            try:
-                company = self._fetch_with_retry(
-                    "https://api.g2.galactictycoons.com/public/company",
-                    Company
-                )
-                if company:
-                    self.company = company
-            except Exception as exc:  # noqa: BLE001
-                _logger.error("Error fetching company data: %s", exc)
-                self.error.emit(str(exc))
-            if self.wake_semaphore.tryAcquire(1, UPDATE_INTERVAL_MS):
-                _logger.debug("CompanyDataManager run method aborted during listing update.")
-                break
 
     def _fetch_with_retry(self, url: str, model_class: Type[T]) -> Optional[T]:
         api_key = os.getenv("GT_API_KEY")
@@ -87,18 +88,15 @@ class CompanyDataManager(QThread):
 
     def _wait_or_stop(self, seconds: float) -> bool:
         """Wait up to seconds; return True if stop was requested during wait."""
-
-        # QSemaphore.tryAcquire blocks this worker thread only; releasing it ends wait early
+        # QSemaphore.tryAcquire blocks this thread only; releasing it ends wait early
         woke = self._wake_semaphore.tryAcquire(1, int(seconds * 1000))
         return woke or self._stop_requested
 
 
-def start_company_fetch(*, retry_attempts: int = 4, base_delay_seconds: float = 2.0) -> CompanyDataManager:
-    """Convenience helper to start a background fetch."""
+def create_company_manager(*, retry_attempts: int = 4, base_delay_seconds: float = 2.0) -> CompanyDataManager:
+    """Convenience helper to create a company data manager."""
 
-    worker = CompanyDataManager(
+    return CompanyDataManager(
         retry_attempts=retry_attempts,
         base_delay_seconds=base_delay_seconds,
     )
-    worker.start()
-    return worker

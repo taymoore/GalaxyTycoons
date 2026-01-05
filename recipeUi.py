@@ -635,6 +635,8 @@ class RecipeWindow(QWidget):
                 )
 
     class RecipeTableProxyModel(QSortFilterProxyModel):
+        filter_changed = Signal()  # Emitted when any filter changes
+
         def __init__(self, parent: QObject | None, settings: Settings = None) -> None:
             super().__init__(parent)
             self.setDynamicSortFilter(True)
@@ -678,6 +680,7 @@ class RecipeWindow(QWidget):
         def set_building_filter(self, building: Building, enabled: bool) -> None:
             self.building_filters[building.id] = enabled
             self.invalidateFilter()
+            self.filter_changed.emit()
 
     class FilterToolbox(QToolBox):
         class TechFilterWidget(QGroupBox):
@@ -910,7 +913,7 @@ class RecipeWindow(QWidget):
         self.profit_delegate = GradientColorDelegate(self)
         # Quantity delegate uses log transformation to match the range calculation
         self.quantity_delegate = GradientColorDelegate(
-            self, 
+            self,
             value_transform=lambda x: math.log1p(x) * QUANTITY_SOLD_SCALING_FACTOR
         )
         self.recipe_table_view.setItemDelegateForColumn(1, self.profit_delegate)
@@ -924,8 +927,9 @@ class RecipeWindow(QWidget):
         self.recipe_table_model.dataChanged.connect(self.update_delegate_ranges)
         self.recipe_table_model.rowsInserted.connect(self.update_delegate_ranges)
         
-        # Connect to proxy model layout changes to update delegate ranges based on visible rows
+        # Connect to proxy model filter changes to update delegate ranges based on visible rows
         self.recipe_table_proxy_model.layoutChanged.connect(self.update_delegate_ranges)
+        self.recipe_table_proxy_model.filter_changed.connect(self.update_delegate_ranges)
         
         self.toolbox.techSliderChanged.connect(self.handle_tech_slider_change)
         self.toolbox.tech_filter_all_widget.slider.valueChanged.connect(
