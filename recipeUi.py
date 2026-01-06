@@ -39,13 +39,30 @@ from PySide6.QtWidgets import (
     QStyleOptionViewItem,
     QStyle,
 )
-from PySide6.QtGui import QCloseEvent, QWheelEvent, QColor, QBrush, QPalette, QTextLayout, QTextCharFormat, QPainter, QTextOption
+from PySide6.QtGui import (
+    QCloseEvent,
+    QWheelEvent,
+    QColor,
+    QBrush,
+    QPalette,
+    QTextLayout,
+    QTextCharFormat,
+    QPainter,
+    QTextOption,
+)
 import pyqtgraph as pg
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
 from settings import Settings
-from utils import align_add, calculate_profit_and_consumables, ConsumablesDelegate, GradientColorDelegate, SpecializationColorDelegate, format_consumables
+from utils import (
+    align_add,
+    calculate_profit_and_consumables,
+    ConsumablesDelegate,
+    GradientColorDelegate,
+    SpecializationColorDelegate,
+    format_consumables,
+)
 from api.gameData import GameDataManager
 from api.models.gameData import Recipe, Specialization, Building, WorkerType
 from api.exchange import Exchange
@@ -54,45 +71,53 @@ from recipeWorker import RecipeWorker
 
 _logger = logging.getLogger(__name__)
 
-QUANTITY_SOLD_SCALING_FACTOR = 10.0  # Scaling factor for quantity sold logarithmic transformation
+QUANTITY_SOLD_SCALING_FACTOR = (
+    10.0  # Scaling factor for quantity sold logarithmic transformation
+)
+
 
 class ValueRecalculationWorker(QObject):
     """Worker that recalculates values in background thread when weight factor changes."""
+
     values_updated = Signal(object)  # dict of {row: value}
     finished = Signal()
-    
+
     def __init__(self, table_data: List[List[float]], weight: float):
         super().__init__(objectName="ValueRecalculationWorker")
         self.table_data = table_data
         self.weight = weight
-    
+
     def run(self) -> None:
         """Recalculate values for all rows with current weight."""
         try:
             _logger.debug("ValueRecalculationWorker started")
             batch_updates = {}
             batch_size = 100  # Emit updates in batches of 100 rows
-            
+
             for row in range(len(self.table_data)):
                 # Check if thread should be interrupted
                 current_thread = QThread.currentThread()
                 if current_thread.isInterruptionRequested():
                     _logger.debug("ValueRecalculationWorker interrupted")
                     break
-                
+
                 profit_per_hour = self.table_data[row][1]
                 quantity_sold_per_hour = self.table_data[row][2]
-                
+
                 # Apply logarithmic transformation to quantity to reduce impact of very large values
                 # log1p(x) = log(1+x), handles 0 and negative values safely
                 # Scale by QUANTITY_SOLD_SCALING_FACTOR to bring it into comparable range with profit/hr
-                quantity_sold_log = math.log1p(quantity_sold_per_hour) * QUANTITY_SOLD_SCALING_FACTOR
-                
+                quantity_sold_log = (
+                    math.log1p(quantity_sold_per_hour) * QUANTITY_SOLD_SCALING_FACTOR
+                )
+
                 # Calculate value: weighted average of profit and log(quantity)
                 # weight is for profit/hr, (1-weight) is for log(quantity)
-                value = (profit_per_hour * (1 - self.weight)) + (quantity_sold_log * self.weight)
+                value = (profit_per_hour * (1 - self.weight)) + (
+                    quantity_sold_log * self.weight
+                )
                 batch_updates[row] = value
-                
+
                 # Emit batch when we reach batch_size or at the end
                 if len(batch_updates) >= batch_size or row == len(self.table_data) - 1:
                     self.values_updated.emit(batch_updates)
@@ -131,13 +156,13 @@ class RecipeWindow(QWidget):
             # Ensure secondary viewboxes inherit the non-negative X constraint
             self.p2.setLimits(xMin=0)
             self.p3.setLimits(xMin=0)
-            
+
             # Link ViewBoxes to the main plot's viewbox geometry
             self.p2.setGeometry(self.p1.vb.sceneBoundingRect())
             self.p3.setGeometry(self.p1.vb.sceneBoundingRect())
-            
-            axis2 = pg.AxisItem('right')
-            axis3 = pg.AxisItem('right')
+
+            axis2 = pg.AxisItem("right")
+            axis3 = pg.AxisItem("right")
             self.p1.layout.addItem(axis2, 2, 3)
             self.p1.layout.addItem(axis3, 2, 4)
             axis2.linkToView(self.p2)
@@ -146,7 +171,7 @@ class RecipeWindow(QWidget):
             axis3.setLabel("Qty Sold Daily", color="#ff8800")
             self.p2.setXLink(self.p1)
             self.p3.setXLink(self.p1)
-            
+
             # Update geometry when viewbox changes
             self.p1.vb.sigStateChanged.connect(self._update_viewbox_geometry)
 
@@ -204,56 +229,100 @@ class RecipeWindow(QWidget):
 
                 listing = Exchange.get_listing(recipe.output.id)
                 if not listing or listing.dataframe.empty:
-                    _logger.warning(f"No listing data available for recipe output {recipe.output.id}")
+                    _logger.warning(
+                        f"No listing data available for recipe output {recipe.output.id}"
+                    )
                     return
 
                 df = listing.dataframe.copy()
                 df.sort_index(inplace=True)
 
-                avg_price_df = df[['average_price']].dropna()
+                avg_price_df = df[["average_price"]].dropna()
                 if avg_price_df.empty:
                     _logger.warning(f"No average price data for recipe {recipe.id}")
                     return
 
-                output_average_price_index = pd.to_datetime(avg_price_df.index).astype("int64") // 10**9
-                output_average_price = pd.to_numeric(avg_price_df["average_price"], errors="coerce") * recipe.output.am / (100 * recipe.timeMinutes / 60)
+                output_average_price_index = (
+                    pd.to_datetime(avg_price_df.index).astype("int64") // 10**9
+                )
+                output_average_price = (
+                    pd.to_numeric(avg_price_df["average_price"], errors="coerce")
+                    * recipe.output.am
+                    / (100 * recipe.timeMinutes / 60)
+                )
 
-                curr_price_df = df[['current_price']].dropna()
-                output_current_price_index = pd.to_datetime(curr_price_df.index).astype("int64") // 10**9
-                output_current_price = pd.to_numeric(curr_price_df["current_price"], errors="coerce") * recipe.output.am / (100 * recipe.timeMinutes / 60)
+                curr_price_df = df[["current_price"]].dropna()
+                output_current_price_index = (
+                    pd.to_datetime(curr_price_df.index).astype("int64") // 10**9
+                )
+                output_current_price = (
+                    pd.to_numeric(curr_price_df["current_price"], errors="coerce")
+                    * recipe.output.am
+                    / (100 * recipe.timeMinutes / 60)
+                )
 
-                self.data_points = list(zip(output_average_price_index, output_average_price))
+                self.data_points = list(
+                    zip(output_average_price_index, output_average_price)
+                )
                 self.listing_price = avg_price_df["average_price"].to_numpy() / 100
 
-                self.p1.plot(x=np.asarray(output_average_price_index), y=np.asarray(output_average_price), 
-                             pen=pg.mkPen(color="#00ff00", width=2), name="Average Profit")
+                self.p1.plot(
+                    x=np.asarray(output_average_price_index),
+                    y=np.asarray(output_average_price),
+                    pen=pg.mkPen(color="#00ff00", width=2),
+                    name="Average Profit",
+                )
 
-                self.p1.plot(x=np.asarray(output_current_price_index), y=np.asarray(output_current_price), 
-                             pen=pg.mkPen(color="#00ff00", width=1, style=Qt.PenStyle.DashLine), name="Current Profit")
+                self.p1.plot(
+                    x=np.asarray(output_current_price_index),
+                    y=np.asarray(output_current_price),
+                    pen=pg.mkPen(color="#00ff00", width=1, style=Qt.PenStyle.DashLine),
+                    name="Current Profit",
+                )
 
-                qty_available_df = df[['total_quantity_available']].dropna()
+                qty_available_df = df[["total_quantity_available"]].dropna()
                 if not qty_available_df.empty:
-                    qty_available_index = pd.to_datetime(qty_available_df.index).astype("int64") // 10**9
-                    qty_available_data = pd.to_numeric(qty_available_df['total_quantity_available'], errors="coerce")
-                    plot_item2 = pg.PlotDataItem(x=np.asarray(qty_available_index), y=np.asarray(qty_available_data), 
-                                                 pen=pg.mkPen(color="#0088ff", width=1, style=Qt.PenStyle.DashLine), name="Total Qty Available")
+                    qty_available_index = (
+                        pd.to_datetime(qty_available_df.index).astype("int64") // 10**9
+                    )
+                    qty_available_data = pd.to_numeric(
+                        qty_available_df["total_quantity_available"], errors="coerce"
+                    )
+                    plot_item2 = pg.PlotDataItem(
+                        x=np.asarray(qty_available_index),
+                        y=np.asarray(qty_available_data),
+                        pen=pg.mkPen(
+                            color="#0088ff", width=1, style=Qt.PenStyle.DashLine
+                        ),
+                        name="Total Qty Available",
+                    )
                     self.p2.addItem(plot_item2)
 
                     # Add moving average line
                     qty_available_data.index = pd.to_datetime(qty_available_df.index)
-                    qty_available_ma = qty_available_data.rolling(window='7D').mean()
+                    qty_available_ma = qty_available_data.rolling(window="7D").mean()
                     if not qty_available_ma.empty:
                         valid_mask = ~qty_available_ma.isna()
                         if valid_mask.any():
-                            ma_line2 = pg.PlotDataItem(x=np.asarray(qty_available_index)[valid_mask], 
-                                                       y=np.asarray(qty_available_ma.values)[valid_mask], 
-                                                       pen=pg.mkPen(color="#0088ff", width=2), 
-                                                       name="Qty Available MA")
+                            ma_line2 = pg.PlotDataItem(
+                                x=np.asarray(qty_available_index)[valid_mask],
+                                y=np.asarray(qty_available_ma.values)[valid_mask],
+                                pen=pg.mkPen(color="#0088ff", width=2),
+                                name="Qty Available MA",
+                            )
                             self.p2.addItem(ma_line2)
 
                     # Set Y range for p2 based on data to avoid autorange side effects on p1
-                    y_min = np.nanmin(qty_available_data.to_numpy()) if len(qty_available_data) else np.nan
-                    y_max = np.nanmax(qty_available_data.to_numpy()) if len(qty_available_data) else np.nan
+                    y_min = (
+                        np.nanmin(qty_available_data.to_numpy())
+                        if len(qty_available_data)
+                        else np.nan
+                    )
+                    y_max = (
+                        np.nanmax(qty_available_data.to_numpy())
+                        if len(qty_available_data)
+                        else np.nan
+                    )
                     # Always include 0 on the y-axis
                     if np.isfinite(y_min) and np.isfinite(y_max):
                         y_min = min(y_min, 0)
@@ -268,36 +337,66 @@ class RecipeWindow(QWidget):
                     last_x = qty_available_index[-1]
                     last_y_current = qty_available_data.iloc[-1]
                     last_y_ma = qty_available_ma.iloc[-1]
-                    label2 = pg.TextItem(text=f"Qty Available: {last_y_current:,.0f}\nMA: {last_y_ma:,.0f}", color="#0088ff", anchor=(1, 0))
+                    label2 = pg.TextItem(
+                        text=f"Qty Available: {last_y_current:,.0f}\nMA: {last_y_ma:,.0f}",
+                        color="#0088ff",
+                        anchor=(1, 0),
+                    )
                     label2.setZValue(10)
                     label2.setPos(last_x, last_y_ma)
                     self.p2.addItem(label2)
                 else:
-                    _logger.debug(f"No total quantity available data for recipe {recipe.id}")
+                    _logger.debug(
+                        f"No total quantity available data for recipe {recipe.id}"
+                    )
 
-                qty_sold_df = df[['quantity_sold']].dropna() if 'quantity_sold' in df.columns else pd.DataFrame()
+                qty_sold_df = (
+                    df[["quantity_sold"]].dropna()
+                    if "quantity_sold" in df.columns
+                    else pd.DataFrame()
+                )
                 if not qty_sold_df.empty:
-                    qty_sold_index = pd.to_datetime(qty_sold_df.index).astype("int64") // 10**9
-                    qty_sold_data = pd.to_numeric(qty_sold_df['quantity_sold'], errors="coerce")
-                    plot_item3 = pg.PlotDataItem(x=np.asarray(qty_sold_index), y=np.asarray(qty_sold_data), 
-                                                 pen=pg.mkPen(color="#ff8800", width=1, style=Qt.PenStyle.DashLine), name="Qty Sold Daily")
+                    qty_sold_index = (
+                        pd.to_datetime(qty_sold_df.index).astype("int64") // 10**9
+                    )
+                    qty_sold_data = pd.to_numeric(
+                        qty_sold_df["quantity_sold"], errors="coerce"
+                    )
+                    plot_item3 = pg.PlotDataItem(
+                        x=np.asarray(qty_sold_index),
+                        y=np.asarray(qty_sold_data),
+                        pen=pg.mkPen(
+                            color="#ff8800", width=1, style=Qt.PenStyle.DashLine
+                        ),
+                        name="Qty Sold Daily",
+                    )
                     self.p3.addItem(plot_item3)
 
                     # Add moving average line
                     qty_sold_data.index = pd.to_datetime(qty_sold_df.index)
-                    qty_sold_ma = qty_sold_data.rolling(window='7D').mean()
+                    qty_sold_ma = qty_sold_data.rolling(window="7D").mean()
                     if not qty_sold_ma.empty:
                         valid_mask = ~qty_sold_ma.isna()
                         if valid_mask.any():
-                            ma_line3 = pg.PlotDataItem(x=np.asarray(qty_sold_index)[valid_mask], 
-                                                       y=np.asarray(qty_sold_ma.values)[valid_mask], 
-                                                       pen=pg.mkPen(color="#ff8800", width=2), 
-                                                       name="Qty Sold MA")
+                            ma_line3 = pg.PlotDataItem(
+                                x=np.asarray(qty_sold_index)[valid_mask],
+                                y=np.asarray(qty_sold_ma.values)[valid_mask],
+                                pen=pg.mkPen(color="#ff8800", width=2),
+                                name="Qty Sold MA",
+                            )
                             self.p3.addItem(ma_line3)
 
                     # Set Y range for p3 based on data to avoid autorange side effects on p1
-                    y_min = np.nanmin(qty_sold_data.to_numpy()) if len(qty_sold_data) else np.nan
-                    y_max = np.nanmax(qty_sold_data.to_numpy()) if len(qty_sold_data) else np.nan
+                    y_min = (
+                        np.nanmin(qty_sold_data.to_numpy())
+                        if len(qty_sold_data)
+                        else np.nan
+                    )
+                    y_max = (
+                        np.nanmax(qty_sold_data.to_numpy())
+                        if len(qty_sold_data)
+                        else np.nan
+                    )
                     # Always include 0 on the y-axis
                     if np.isfinite(y_min) and np.isfinite(y_max):
                         y_min = min(y_min, 0)
@@ -312,7 +411,11 @@ class RecipeWindow(QWidget):
                     last_x = qty_sold_index[-1]
                     last_y_current = qty_sold_data.iloc[-1]
                     last_y_ma = qty_sold_ma.iloc[-1]
-                    label3 = pg.TextItem(text=f"Qty Sold: {last_y_current:,.0f}\nMA: {last_y_ma:,.0f}", color="#ff8800", anchor=(1, 0))
+                    label3 = pg.TextItem(
+                        text=f"Qty Sold: {last_y_current:,.0f}\nMA: {last_y_ma:,.0f}",
+                        color="#ff8800",
+                        anchor=(1, 0),
+                    )
                     label3.setZValue(10)
                     label3.setPos(last_x, last_y_ma)
                     self.p3.addItem(label3)
@@ -323,74 +426,137 @@ class RecipeWindow(QWidget):
                 ingredient_current_price_subtotal = None
                 colormap = cm.get_cmap("tab10")
                 num_ingredients = len(recipe.inputs)
-                ingredient_colors = [mcolors.to_hex(colormap(i / num_ingredients)) for i in range(num_ingredients)]
-                
+                ingredient_colors = [
+                    mcolors.to_hex(colormap(i / num_ingredients))
+                    for i in range(num_ingredients)
+                ]
+
                 for material_idx, material_amount in enumerate(recipe.inputs):
                     material_listing = Exchange.get_listing(material_amount.id)
                     if not material_listing or material_listing.dataframe.empty:
                         _logger.debug(f"No data for ingredient {material_amount.id}")
                         continue
-                    
+
                     material_df = material_listing.dataframe.copy()
                     material_df.sort_index(inplace=True)
-                    
+
                     input_average_price = material_df[["average_price"]].dropna().copy()
                     if input_average_price.empty:
                         continue
-                    input_average_price.index = pd.to_datetime(input_average_price.index).astype("int64") // 10**9
-                    input_average_price["price"] = input_average_price["average_price"] * material_amount.am / (100 * recipe.timeMinutes / 60)
-                    
+                    input_average_price.index = (
+                        pd.to_datetime(input_average_price.index).astype("int64")
+                        // 10**9
+                    )
+                    input_average_price["price"] = (
+                        input_average_price["average_price"]
+                        * material_amount.am
+                        / (100 * recipe.timeMinutes / 60)
+                    )
+
                     input_current_price = material_df[["current_price"]].dropna().copy()
                     if input_current_price.empty:
                         continue
-                    input_current_price.index = pd.to_datetime(input_current_price.index).astype("int64") // 10**9
-                    input_current_price["price"] = input_current_price["current_price"] * material_amount.am / (100 * recipe.timeMinutes / 60)
+                    input_current_price.index = (
+                        pd.to_datetime(input_current_price.index).astype("int64")
+                        // 10**9
+                    )
+                    input_current_price["price"] = (
+                        input_current_price["current_price"]
+                        * material_amount.am
+                        / (100 * recipe.timeMinutes / 60)
+                    )
 
                     ingredient_color = ingredient_colors[material_idx]
 
-                    self.p1.plot(x=input_average_price.index.to_numpy(), y=input_average_price["price"].to_numpy(), 
-                                 pen=pg.mkPen(color=ingredient_color, width=1), name=f"Average Ingredient: {material_listing.name}")
-                    self.p1.plot(x=input_current_price.index.to_numpy(), y=input_current_price["price"].to_numpy(), 
-                                 pen=pg.mkPen(color=ingredient_color, width=1, style=Qt.PenStyle.DashLine), name=f"Current Ingredient: {material_listing.name}")
+                    self.p1.plot(
+                        x=input_average_price.index.to_numpy(),
+                        y=input_average_price["price"].to_numpy(),
+                        pen=pg.mkPen(color=ingredient_color, width=1),
+                        name=f"Average Ingredient: {material_listing.name}",
+                    )
+                    self.p1.plot(
+                        x=input_current_price.index.to_numpy(),
+                        y=input_current_price["price"].to_numpy(),
+                        pen=pg.mkPen(
+                            color=ingredient_color, width=1, style=Qt.PenStyle.DashLine
+                        ),
+                        name=f"Current Ingredient: {material_listing.name}",
+                    )
 
                     if not input_current_price.empty:
-                        label = pg.TextItem(text=f"{material_listing.name}\nAv Cost/hr: {input_average_price['price'].iloc[-1]:,.2f}\nCurr Cost/hr: {input_current_price['price'].iloc[-1]:,.2f}", 
-                                            color=ingredient_color, anchor=(1, 1))
-                        label.setPos(input_current_price.index[-1], input_current_price["price"].iloc[-1])
+                        label = pg.TextItem(
+                            text=f"{material_listing.name}\nAv Cost/hr: {input_average_price['price'].iloc[-1]:,.2f}\nCurr Cost/hr: {input_current_price['price'].iloc[-1]:,.2f}",
+                            color=ingredient_color,
+                            anchor=(1, 1),
+                        )
+                        label.setPos(
+                            input_current_price.index[-1],
+                            input_current_price["price"].iloc[-1],
+                        )
                         self.p1.addItem(label)
 
-                    ingredient_average_price_subtotal = (align_add(ingredient_average_price_subtotal, input_average_price["price"]) 
-                                                         if ingredient_average_price_subtotal is not None else input_average_price["price"])
-                    ingredient_current_price_subtotal = (align_add(ingredient_current_price_subtotal, input_current_price["price"]) 
-                                                         if ingredient_current_price_subtotal is not None else input_current_price["price"])
+                    ingredient_average_price_subtotal = (
+                        align_add(
+                            ingredient_average_price_subtotal,
+                            input_average_price["price"],
+                        )
+                        if ingredient_average_price_subtotal is not None
+                        else input_average_price["price"]
+                    )
+                    ingredient_current_price_subtotal = (
+                        align_add(
+                            ingredient_current_price_subtotal,
+                            input_current_price["price"],
+                        )
+                        if ingredient_current_price_subtotal is not None
+                        else input_current_price["price"]
+                    )
 
                 if ingredient_average_price_subtotal is not None:
                     ingredient_average_price_subtotal.dropna(inplace=True)
                     if not ingredient_average_price_subtotal.empty:
-                        self.p1.plot(x=ingredient_average_price_subtotal.index.to_numpy(), y=ingredient_average_price_subtotal.to_numpy(), 
-                                     pen=pg.mkPen(color="#ff0000", width=2), name="Average Ingredient Total")
-                
+                        self.p1.plot(
+                            x=ingredient_average_price_subtotal.index.to_numpy(),
+                            y=ingredient_average_price_subtotal.to_numpy(),
+                            pen=pg.mkPen(color="#ff0000", width=2),
+                            name="Average Ingredient Total",
+                        )
+
                 if ingredient_current_price_subtotal is not None:
                     ingredient_current_price_subtotal.dropna(inplace=True)
                     if not ingredient_current_price_subtotal.empty:
-                        self.p1.plot(x=ingredient_current_price_subtotal.index.to_numpy(), y=ingredient_current_price_subtotal.to_numpy(), 
-                                     pen=pg.mkPen(color="#ff0000", width=1, style=Qt.PenStyle.DashLine), name="Current Ingredient Total")
+                        self.p1.plot(
+                            x=ingredient_current_price_subtotal.index.to_numpy(),
+                            y=ingredient_current_price_subtotal.to_numpy(),
+                            pen=pg.mkPen(
+                                color="#ff0000", width=1, style=Qt.PenStyle.DashLine
+                            ),
+                            name="Current Ingredient Total",
+                        )
                         if len(ingredient_current_price_subtotal) > 0:
-                            label = pg.TextItem(text=f"Average Cost/hr: {ingredient_average_price_subtotal.iloc[-1]:,.2f}\nCurrent Cost/hr: {ingredient_current_price_subtotal.iloc[-1]:,.2f}", 
-                                                color="#ff0000", anchor=(1, 1))
-                            label.setPos(ingredient_current_price_subtotal.index[-1], ingredient_current_price_subtotal.iloc[-1])
+                            label = pg.TextItem(
+                                text=f"Average Cost/hr: {ingredient_average_price_subtotal.iloc[-1]:,.2f}\nCurrent Cost/hr: {ingredient_current_price_subtotal.iloc[-1]:,.2f}",
+                                color="#ff0000",
+                                anchor=(1, 1),
+                            )
+                            label.setPos(
+                                ingredient_current_price_subtotal.index[-1],
+                                ingredient_current_price_subtotal.iloc[-1],
+                            )
                             self.p1.addItem(label)
 
                 # Constrain X to non-negative values with slight padding on the right
                 self.p1.vb.autoRange()
-                
-                # Limit x-axis width to 2 weeks maximum, showing latest data
-                two_weeks_seconds = 14 * 24 * 60 * 60
-                x_min, x_max = self.p1.vb.viewRange()[0]
-                x_range = x_max - x_min
-                if x_range > two_weeks_seconds:
-                    x_min = x_max - two_weeks_seconds
-                    self.p1.vb.setXRange(x_min, x_max, padding=0)
+
+                SHOW_TWO_WEEKS = False
+                if SHOW_TWO_WEEKS:
+                    # Limit x-axis width to 2 weeks maximum, showing latest data
+                    two_weeks_seconds = 14 * 24 * 60 * 60
+                    x_min, x_max = self.p1.vb.viewRange()[0]
+                    x_range = x_max - x_min
+                    if x_range > two_weeks_seconds:
+                        x_min = x_max - two_weeks_seconds
+                        self.p1.vb.setXRange(x_min, x_max, padding=0)
             except Exception as e:
                 _logger.error(f"Error plotting recipe {recipe.id}: {e}", exc_info=True)
 
@@ -421,7 +587,9 @@ class RecipeWindow(QWidget):
         def __init__(self, parent: QObject):
             super().__init__(parent)
             self.table_data: List[List[str]] = []
-            self.consumables_data: List[tuple[tuple[int, ...], tuple[int, ...]]] = []  # Store (preferred, rejected) tuples
+            self.consumables_data: List[tuple[tuple[int, ...], tuple[int, ...]]] = (
+                []
+            )  # Store (preferred, rejected) tuples
             self.recipes: List[Recipe] = []
             self.header_data: List[str] = [
                 "Recipe Output",
@@ -483,7 +651,11 @@ class RecipeWindow(QWidget):
             row = []
             row.append(GameDataManager.get_item_name(recipe.output.id))
             row.append(profit_per_hour)
-            quantity_sold_per_hour = quantity_sold_daily * (recipe.timeMinutes / 60) if recipe.timeMinutes > 0 else 0.0
+            quantity_sold_per_hour = (
+                quantity_sold_daily * (recipe.timeMinutes / 60)
+                if recipe.timeMinutes > 0
+                else 0.0
+            )
             row.append(quantity_sold_per_hour)
             row.append(0.0)  # Value column, will be updated later
             row.append(
@@ -496,7 +668,7 @@ class RecipeWindow(QWidget):
             self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
             self.table_data.append(row)
             self.endInsertRows()
-            
+
             # Update min/max values for gradient coloring
             self.update_min_max_values()
 
@@ -514,50 +686,61 @@ class RecipeWindow(QWidget):
                 self.dataChanged.emit(index, index)
                 return True
             return False
-        
-        def update_consumables(self, row: int, consumable_preferred: tuple[int, ...], consumable_rejected: tuple[int, ...]) -> None:
+
+        def update_consumables(
+            self,
+            row: int,
+            consumable_preferred: tuple[int, ...],
+            consumable_rejected: tuple[int, ...],
+        ) -> None:
             """Update consumables data and text for a specific row."""
-            self.table_data[row][5] = format_consumables(consumable_preferred, consumable_rejected)
+            self.table_data[row][5] = format_consumables(
+                consumable_preferred, consumable_rejected
+            )
             self.consumables_data[row] = (consumable_preferred, consumable_rejected)
-            
+
             # Emit dataChanged for the consumables column
             consumables_index = self.index(row, 5)
             self.dataChanged.emit(consumables_index, consumables_index)
-        
+
         def update_value(self, row: int, value: float) -> None:
             """Update the value column for a specific row."""
             self.table_data[row][3] = value
             value_index = self.index(row, 3)
             self.dataChanged.emit(value_index, value_index)
-        
+
         def update_values_batch(self, values_dict: dict) -> None:
             """Update multiple value rows at once and emit a single dataChanged signal.
-            
+
             Args:
                 values_dict: Dictionary of {row: value} pairs
             """
             if not values_dict:
                 return
-            
+
             # Update all values in the dictionary
             for row, value in values_dict.items():
                 self.table_data[row][3] = value
-            
+
             # Emit a single dataChanged signal for the entire range
             if values_dict:
                 first_row = min(values_dict.keys())
                 last_row = max(values_dict.keys())
                 self.dataChanged.emit(self.index(first_row, 3), self.index(last_row, 3))
-        
+
         def update_min_max_values(self) -> None:
             """Update min/max values for profit and quantity columns for gradient coloring."""
             if not self.table_data:
                 self.profit_min = self.profit_max = 0.0
                 self.quantity_min = self.quantity_max = 0.0
                 return
-            
+
             # Extract profit values (column 1), filtering out inf and -inf
-            profit_values = [row[1] for row in self.table_data if isinstance(row[1], (int, float)) and math.isfinite(row[1])]
+            profit_values = [
+                row[1]
+                for row in self.table_data
+                if isinstance(row[1], (int, float)) and math.isfinite(row[1])
+            ]
             if profit_values:
                 self.profit_min = min(profit_values)
                 self.profit_max = max(profit_values)
@@ -565,10 +748,13 @@ class RecipeWindow(QWidget):
                     self.profit_max = self.profit_min + 1.0
             else:
                 self.profit_min = self.profit_max = 0.0
-            
+
             # Extract quantity values (column 2), apply log transform, filter out inf and -inf
-            quantity_values = [math.log1p(row[2]) * QUANTITY_SOLD_SCALING_FACTOR for row in self.table_data 
-                              if isinstance(row[2], (int, float)) and math.isfinite(row[2])]
+            quantity_values = [
+                math.log1p(row[2]) * QUANTITY_SOLD_SCALING_FACTOR
+                for row in self.table_data
+                if isinstance(row[2], (int, float)) and math.isfinite(row[2])
+            ]
             if quantity_values:
                 self.quantity_min = min(quantity_values)
                 self.quantity_max = max(quantity_values)
@@ -576,7 +762,6 @@ class RecipeWindow(QWidget):
                     self.quantity_max = self.quantity_min + 1.0
             else:
                 self.quantity_min = self.quantity_max = 0.0
-
 
     class RecipeTableView(QTableView):
         recipe_clicked = Signal(Recipe)
@@ -641,7 +826,9 @@ class RecipeWindow(QWidget):
             super().__init__(parent)
             self.setDynamicSortFilter(True)
             self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-            self.tech_level_filters: Dict[Specialization, int] = settings.tech_level_filters if settings else {}
+            self.tech_level_filters: Dict[Specialization, int] = (
+                settings.tech_level_filters if settings else {}
+            )
             self.building_filters: Dict[int, bool] = {}
             self.tech_level_modifier: int = 0
 
@@ -665,15 +852,19 @@ class RecipeWindow(QWidget):
             recipe = source_model.recipes[source_row]
 
             # Filter based on tech
-            building_specialization = GameDataManager.get_building(recipe.producedIn).specialization
-            max_tech_level = self.tech_level_filters.get(building_specialization, float('inf'))
-            if recipe.reqTech > max_tech_level + self.tech_level_modifier: 
+            building_specialization = GameDataManager.get_building(
+                recipe.producedIn
+            ).specialization
+            max_tech_level = self.tech_level_filters.get(
+                building_specialization, float("inf")
+            )
+            if recipe.reqTech > max_tech_level + self.tech_level_modifier:
                 return False
-            
+
             # Filter based on building
             if not self.building_filters.get(recipe.producedIn, True):
                 return False
-            
+
             return super().filterAcceptsRow(source_row, source_parent)
 
         @Slot(int, bool)
@@ -734,7 +925,7 @@ class RecipeWindow(QWidget):
             @Slot(bool)
             def handle_toggle(self, checked: bool) -> None:
                 self.checkbox_toggled.emit(self.building, checked)
-        
+
         techSliderChanged = Signal(Specialization, int)
         valueWeightChanged = Signal(float)
 
@@ -756,7 +947,10 @@ class RecipeWindow(QWidget):
                 Specialization, RecipeWindow.FilterToolbox.TechFilterWidget
             ] = {}
             for specialization in Specialization:
-                if specialization == Specialization.NONE or specialization == Specialization.RESOURCE_EXTRACTION:
+                if (
+                    specialization == Specialization.NONE
+                    or specialization == Specialization.RESOURCE_EXTRACTION
+                ):
                     continue
                 tech_widget = RecipeWindow.FilterToolbox.TechFilterWidget(
                     Specialization(specialization).name.title(), self
@@ -793,10 +987,10 @@ class RecipeWindow(QWidget):
             value_weight_widget = QWidget(self)
             value_weight_layout = QVBoxLayout()
             value_weight_widget.setLayout(value_weight_layout)
-            
+
             value_weight_label = QLabel("Value Weight Factor", self)
             value_weight_layout.addWidget(value_weight_label)
-            
+
             self.value_weight_slider = QSlider(Qt.Orientation.Horizontal, self)
             self.value_weight_slider.setMinimum(0)
             self.value_weight_slider.setMaximum(100)
@@ -804,28 +998,29 @@ class RecipeWindow(QWidget):
             self.value_weight_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
             self.value_weight_slider.setTickInterval(10)
             value_weight_layout.addWidget(self.value_weight_slider)
-            
+
             self.value_weight_value_label = QLabel("0.5", self)
             value_weight_layout.addWidget(self.value_weight_value_label)
-            
-            self.value_weight_slider.valueChanged.connect(self.handle_value_weight_change)
-            
+
+            self.value_weight_slider.valueChanged.connect(
+                self.handle_value_weight_change
+            )
+
             self.addItem(value_weight_widget, "Value Weight")
 
             self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
             self.setMinimumWidth(145)
-        
+
         @Slot(int)
         def handle_value_weight_change(self, value: int) -> None:
             """Handle value weight slider changes. Value ranges from 0-100, converted to 0.0-1.0."""
             weight = value / 100.0
             self.value_weight_value_label.setText(f"{weight:.2f}")
             self.valueWeightChanged.emit(weight)
-        
+
         def get_value_weight(self) -> float:
             """Get the current value weight as a float between 0.0 and 1.0."""
             return self.value_weight_slider.value() / 100.0
-
 
         @Slot(bool)
         def handle_building_filter_all_toggle(self, checked: bool) -> None:
@@ -866,10 +1061,11 @@ class RecipeWindow(QWidget):
                 tech_level_maximums[specialization] = tech_widget.slider.maximum()
             return tech_level_maximums
 
-
-    def __init__(self, parent: QObject, recipe_worker: RecipeWorker, settings: Settings) -> None:
+    def __init__(
+        self, parent: QObject, recipe_worker: RecipeWorker, settings: Settings
+    ) -> None:
         super().__init__(parent)
-        
+
         # TODO: Remove this reference cycle
         self.settings = settings
 
@@ -877,16 +1073,18 @@ class RecipeWindow(QWidget):
         self.recipe_worker = recipe_worker
         self.main_layout = QHBoxLayout()
         self.setLayout(self.main_layout)
-        
+
         # Initialize value recalculation worker thread and debounce timer
         self.value_recalc_worker = None
         self.value_recalc_thread = None
         self.pending_weight = None
-        
+
         # Debounce timer: waits 300ms after slider stops moving before recalculating
         self.value_weight_debounce_timer = QTimer(self)
         self.value_weight_debounce_timer.setSingleShot(True)
-        self.value_weight_debounce_timer.timeout.connect(self.on_value_weight_debounce_timeout)
+        self.value_weight_debounce_timer.timeout.connect(
+            self.on_value_weight_debounce_timeout
+        )
 
         # Filter Toolbox
         self.toolbox = RecipeWindow.FilterToolbox(self, self.settings)
@@ -902,35 +1100,38 @@ class RecipeWindow(QWidget):
 
         self.recipe_table_model = RecipeWindow.RecipeTableModel(self)
         self.recipe_table_view = RecipeWindow.RecipeTableView(self)
-        self.recipe_table_proxy_model = RecipeWindow.RecipeTableProxyModel(self, self.settings)
+        self.recipe_table_proxy_model = RecipeWindow.RecipeTableProxyModel(
+            self, self.settings
+        )
         self.recipe_table_proxy_model.setSourceModel(self.recipe_table_model)
-        
+
         # Apply custom delegate to consumables column
         consumables_delegate = ConsumablesDelegate(self)
         self.recipe_table_view.setItemDelegateForColumn(5, consumables_delegate)
-        
+
         # Apply gradient color delegates to profit and quantity columns
         self.profit_delegate = GradientColorDelegate(self)
         # Quantity delegate uses log transformation to match the range calculation
         self.quantity_delegate = GradientColorDelegate(
-            self,
-            value_transform=lambda x: math.log1p(x) * QUANTITY_SOLD_SCALING_FACTOR
+            self, value_transform=lambda x: math.log1p(x) * QUANTITY_SOLD_SCALING_FACTOR
         )
         self.recipe_table_view.setItemDelegateForColumn(1, self.profit_delegate)
         self.recipe_table_view.setItemDelegateForColumn(2, self.quantity_delegate)
-        
+
         # Apply specialization color delegate to tech requirement column
         self.specialization_delegate = SpecializationColorDelegate(self)
         self.recipe_table_view.setItemDelegateForColumn(4, self.specialization_delegate)
-        
+
         # Connect to model data changes to update delegate ranges
         self.recipe_table_model.dataChanged.connect(self.update_delegate_ranges)
         self.recipe_table_model.rowsInserted.connect(self.update_delegate_ranges)
-        
+
         # Connect to proxy model filter changes to update delegate ranges based on visible rows
         self.recipe_table_proxy_model.layoutChanged.connect(self.update_delegate_ranges)
-        self.recipe_table_proxy_model.filter_changed.connect(self.update_delegate_ranges)
-        
+        self.recipe_table_proxy_model.filter_changed.connect(
+            self.update_delegate_ranges
+        )
+
         self.toolbox.techSliderChanged.connect(self.handle_tech_slider_change)
         self.toolbox.tech_filter_all_widget.slider.valueChanged.connect(
             self.handle_all_tech_slider_change
@@ -955,9 +1156,7 @@ class RecipeWindow(QWidget):
             self.toolbox.handle_tech_level_change
         )
         self.recipe_worker.recipe_added_signal.connect(self.handle_recipe_added)
-        self.recipe_worker.exchange_updated_signal.connect(
-            self.handle_exchange_updated
-        )
+        self.recipe_worker.exchange_updated_signal.connect(self.handle_exchange_updated)
 
     # Called from toolbox when a tech slider is changed
     @Slot(Specialization, int)
@@ -973,38 +1172,40 @@ class RecipeWindow(QWidget):
         self.recipe_table_proxy_model.tech_level_modifier = value
         self.recipe_table_proxy_model.invalidateFilter()
         self.update_delegate_ranges()
-    
+
     @Slot(float)
     def handle_value_weight_change(self, weight: float) -> None:
         """Debounce value weight changes - wait 300ms after slider stops before recalculating."""
         self.pending_weight = weight
         # Restart the timer each time slider moves
         self.value_weight_debounce_timer.start(300)  # 300ms debounce
-    
+
     @Slot()
     def update_delegate_ranges(self) -> None:
         """Update the min/max ranges for gradient delegates based on visible (filtered) rows only."""
         # Calculate ranges from visible rows in the proxy model
         profit_values = []
         quantity_values = []
-        
+
         # Iterate through all rows in the proxy model (only visible rows)
         for proxy_row in range(self.recipe_table_proxy_model.rowCount()):
             source_index = self.recipe_table_proxy_model.mapToSource(
                 self.recipe_table_proxy_model.index(proxy_row, 0)
             )
             source_row = source_index.row()
-            
+
             # Get profit value (column 1)
             profit_val = self.recipe_table_model.table_data[source_row][1]
             if isinstance(profit_val, (int, float)) and math.isfinite(profit_val):
                 profit_values.append(profit_val)
-            
+
             # Get quantity value (column 2) with log transformation
             quantity_val = self.recipe_table_model.table_data[source_row][2]
             if isinstance(quantity_val, (int, float)) and math.isfinite(quantity_val):
-                quantity_values.append(math.log1p(quantity_val) * QUANTITY_SOLD_SCALING_FACTOR)
-        
+                quantity_values.append(
+                    math.log1p(quantity_val) * QUANTITY_SOLD_SCALING_FACTOR
+                )
+
         # Update profit delegate range
         if profit_values:
             profit_min = min(profit_values)
@@ -1013,9 +1214,9 @@ class RecipeWindow(QWidget):
                 profit_max = profit_min + 1.0
         else:
             profit_min = profit_max = 0.0
-        
+
         self.profit_delegate.set_value_range(profit_min, profit_max)
-        
+
         # Update quantity delegate range
         if quantity_values:
             quantity_min = min(quantity_values)
@@ -1024,31 +1225,35 @@ class RecipeWindow(QWidget):
                 quantity_max = quantity_min + 1.0
         else:
             quantity_min = quantity_max = 0.0
-        
+
         self.quantity_delegate.set_value_range(quantity_min, quantity_max)
-        
+
         # Trigger a repaint of the affected columns
         if self.recipe_table_model.rowCount() > 0:
             self.recipe_table_view.viewport().update()
-    
+
     @Slot()
     def on_value_weight_debounce_timeout(self) -> None:
         """Called after slider stops moving - now actually recalculate values."""
         if self.pending_weight is None:
             return
-        
+
         weight = self.pending_weight
         self.pending_weight = None
-        
+
         # Stop any existing recalculation worker
         if self.value_recalc_thread is not None:
             try:
                 if self.value_recalc_thread.isRunning():
-                    _logger.debug("Requesting interruption of existing ValueRecalculationWorker")
+                    _logger.debug(
+                        "Requesting interruption of existing ValueRecalculationWorker"
+                    )
                     self.value_recalc_thread.requestInterruption()
                     # Wait up to 500ms for thread to finish gracefully
                     if not self.value_recalc_thread.wait(500):
-                        _logger.warning("ValueRecalculationWorker thread did not finish in time")
+                        _logger.warning(
+                            "ValueRecalculationWorker thread did not finish in time"
+                        )
             except RuntimeError:
                 # Thread was already deleted, that's fine
                 pass
@@ -1056,26 +1261,30 @@ class RecipeWindow(QWidget):
                 # Clean up old worker and thread
                 self.value_recalc_worker = None
                 self.value_recalc_thread = None
-        
+
         # Create new worker and thread
-        self.value_recalc_worker = ValueRecalculationWorker(self.recipe_table_model.table_data, weight)
+        self.value_recalc_worker = ValueRecalculationWorker(
+            self.recipe_table_model.table_data, weight
+        )
         self.value_recalc_thread = QThread(self)
-        
+
         # Move worker to thread
         self.value_recalc_worker.moveToThread(self.value_recalc_thread)
-        
+
         # Connect signals - NO deleteLater on thread/worker, we manage lifecycle manually
         self.value_recalc_thread.started.connect(self.value_recalc_worker.run)
-        self.value_recalc_worker.values_updated.connect(self.handle_values_updated, Qt.ConnectionType.QueuedConnection)
+        self.value_recalc_worker.values_updated.connect(
+            self.handle_values_updated, Qt.ConnectionType.QueuedConnection
+        )
         self.value_recalc_worker.finished.connect(self.value_recalc_thread.quit)
-        
+
         # Start the thread
         self.value_recalc_thread.start()
-    
+
     @Slot(dict)
     def handle_values_updated(self, values_dict: dict) -> None:
         """Handle batch value updates from worker thread (runs on main thread).
-        
+
         Args:
             values_dict: Dictionary of {row: value} pairs
         """
@@ -1093,7 +1302,11 @@ class RecipeWindow(QWidget):
             consumable_preferred_combination = ()
             consumable_rejected_combination = ()
         else:
-            profit_per_hour, consumable_preferred_combination, consumable_rejected_combination = result
+            (
+                profit_per_hour,
+                consumable_preferred_combination,
+                consumable_rejected_combination,
+            ) = result
 
         # Add building filter
         checkbox = self.toolbox.add_building_filter(building)
@@ -1115,16 +1328,26 @@ class RecipeWindow(QWidget):
             _logger.warning(f"Could not get quantity sold for recipe {recipe.id}: {e}")
         # Update recipe table
         self.recipe_table_model.add_row(
-            recipe, profit_per_hour, consumable_preferred_combination, consumable_rejected_combination, quantity_sold_daily
+            recipe,
+            profit_per_hour,
+            consumable_preferred_combination,
+            consumable_rejected_combination,
+            quantity_sold_daily,
         )
-        
+
         # Calculate and set the value based on current weight
         row = self.recipe_table_model.rowCount() - 1
         weight = self.toolbox.get_value_weight()
-        quantity_sold_per_hour = quantity_sold_daily * (recipe.timeMinutes / 60) if recipe.timeMinutes > 0 else 0.0
+        quantity_sold_per_hour = (
+            quantity_sold_daily * (recipe.timeMinutes / 60)
+            if recipe.timeMinutes > 0
+            else 0.0
+        )
         # Apply logarithmic transformation to quantity
         # Scale by QUANTITY_SOLD_SCALING_FACTOR to bring it into comparable range with profit/hr
-        quantity_sold_log = math.log1p(quantity_sold_per_hour) * QUANTITY_SOLD_SCALING_FACTOR
+        quantity_sold_log = (
+            math.log1p(quantity_sold_per_hour) * QUANTITY_SOLD_SCALING_FACTOR
+        )
         value = (profit_per_hour * (1 - weight)) + (quantity_sold_log * weight)
         self.recipe_table_model.update_value(row, value)
 
@@ -1144,39 +1367,63 @@ class RecipeWindow(QWidget):
                 consumable_preferred_combination = ()
                 consumable_rejected_combination = ()
             else:
-                profit_per_hour, consumable_preferred_combination, consumable_rejected_combination = result
+                (
+                    profit_per_hour,
+                    consumable_preferred_combination,
+                    consumable_rejected_combination,
+                ) = result
 
             # Get updated quantity sold daily and convert to per-hour
             quantity_sold_daily = 0.0
             try:
                 listing = Exchange.get_listing(recipe.output.id)
                 if listing:
-                    quantity_sold_daily = listing.average_quantity_sold_daily * (recipe.timeMinutes / 60) if recipe.timeMinutes > 0 else 0.0
+                    quantity_sold_daily = (
+                        listing.average_quantity_sold_daily * (recipe.timeMinutes / 60)
+                        if recipe.timeMinutes > 0
+                        else 0.0
+                    )
             except Exception as e:
-                _logger.warning(f"Could not get quantity sold for recipe {recipe.id}: {e}")
+                _logger.warning(
+                    f"Could not get quantity sold for recipe {recipe.id}: {e}"
+                )
 
-            self.recipe_table_model.setData(self.recipe_table_model.index(row, 1), profit_per_hour, Qt.ItemDataRole.EditRole)
-            self.recipe_table_model.setData(self.recipe_table_model.index(row, 2), quantity_sold_daily, Qt.ItemDataRole.EditRole)
-            
+            self.recipe_table_model.setData(
+                self.recipe_table_model.index(row, 1),
+                profit_per_hour,
+                Qt.ItemDataRole.EditRole,
+            )
+            self.recipe_table_model.setData(
+                self.recipe_table_model.index(row, 2),
+                quantity_sold_daily,
+                Qt.ItemDataRole.EditRole,
+            )
+
             # Update value based on current weight
             weight = self.toolbox.get_value_weight()
             # Apply logarithmic transformation to quantity
             # Scale by QUANTITY_SOLD_SCALING_FACTOR to bring it into comparable range with profit/hr
-            quantity_sold_log = math.log1p(quantity_sold_daily) * QUANTITY_SOLD_SCALING_FACTOR
+            quantity_sold_log = (
+                math.log1p(quantity_sold_daily) * QUANTITY_SOLD_SCALING_FACTOR
+            )
             value = (profit_per_hour * (1 - weight)) + (quantity_sold_log * weight)
             self.recipe_table_model.update_value(row, value)
-            
-            self.recipe_table_model.update_consumables(row, consumable_preferred_combination, consumable_rejected_combination)
+
+            self.recipe_table_model.update_consumables(
+                row, consumable_preferred_combination, consumable_rejected_combination
+            )
 
     def closeEvent(self, event: QCloseEvent) -> None:
         _logger.debug("Saving settings.")
         # TODO: Put this in galaxyTycoonUi.py
-        self.settings.tech_level_filters = self.recipe_table_proxy_model.tech_level_filters
+        self.settings.tech_level_filters = (
+            self.recipe_table_proxy_model.tech_level_filters
+        )
         self.settings.tech_level_maximums = self.toolbox.get_tech_level_maximums()
-        
+
         # Stop the debounce timer
         self.value_weight_debounce_timer.stop()
-        
+
         # Clean up value recalculation thread
         if self.value_recalc_thread is not None:
             try:
@@ -1184,12 +1431,11 @@ class RecipeWindow(QWidget):
                     _logger.debug("Cleaning up ValueRecalculationWorker thread")
                     self.value_recalc_thread.requestInterruption()
                     if not self.value_recalc_thread.wait(1000):
-                        _logger.warning("ValueRecalculationWorker thread did not finish, terminating")
+                        _logger.warning(
+                            "ValueRecalculationWorker thread did not finish, terminating"
+                        )
                         self.value_recalc_thread.terminate()
                         self.value_recalc_thread.wait()
             except RuntimeError:
                 # Thread was already deleted, that's fine
                 pass
-
-
-
