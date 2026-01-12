@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 
 from api.gameData import GameDataManager
 from api.exchange import Exchange
+from api.company import CompanyDataManager
 from configurationUi import ConfigurationWindow
 from recipeUi import RecipeWindow
 from planetsUi import PlanetsWindow
@@ -18,6 +19,7 @@ from recipeWorker import RecipeWorker
 from settings import Settings
 
 _logger = logging.getLogger(__name__)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -32,24 +34,31 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
 
         # Create and start RecipeWorker thread
-        self.recipe_worker = RecipeWorker(GameDataManager.get().recipes, self.settings.tech_level_maximums)
-        self.recipe_worker_thread = QThread(self)
-        self.recipe_worker_thread.setObjectName("RecipeWorkerThread")
-        self.recipe_worker.moveToThread(self.recipe_worker_thread)
-        self.recipe_worker_thread.started.connect(self.recipe_worker.run)
-        self.recipe_worker.finished.connect(self.recipe_worker.deleteLater)
-        self.recipe_worker_thread.finished.connect(
-            self.recipe_worker_thread.deleteLater
+        self.recipe_worker = RecipeWorker(
+            GameDataManager.get().recipes, self.settings.tech_level_maximums
         )
+        self.api_thread = QThread(self)
+        self.api_thread.setObjectName("APIThread")
+        self.recipe_worker.moveToThread(self.api_thread)
+        self.api_thread.started.connect(self.recipe_worker.run)
+        self.recipe_worker.finished.connect(self.recipe_worker.deleteLater)
+        self.api_thread.finished.connect(self.api_thread.deleteLater)
+
+        # Create company data manager
+        self.company_data_manager = CompanyDataManager(self)
+        self.company_data_manager.moveToThread(self.api_thread)
+        self.api_thread.finished.connect(self.company_data_manager.deleteLater)
 
         # Initialize the sub-windows
         self.recipe_tab = RecipeWindow(self, self.recipe_worker, self.settings)
         self.planets_tab = PlanetsWindow(self)
         self.investments_tab = InvestmentsWindow(self)
-        self.configuration_tab = ConfigurationWindow(self, self.settings, self.recipe_worker)
+        self.configuration_tab = ConfigurationWindow(
+            self, self.settings, self.recipe_worker
+        )
 
         # Start the recipe worker thread
-        self.recipe_worker_thread.start()
+        self.api_thread.start()
 
         # Add tabs
         self.tabs.addTab(self.recipe_tab, "Recipes & Profits")
@@ -66,38 +75,39 @@ class MainWindow(QMainWindow):
     def _create_menubar(self) -> None:
         """Create the menubar with export options."""
         menubar = self.menuBar()
-        
+
         tools_menu = menubar.addMenu("Tools")
-        
+
         copy_listings_action = QAction("Copy Listings to Clipboard", self)
         copy_listings_action.triggered.connect(self._copy_listings_to_clipboard)
         tools_menu.addAction(copy_listings_action)
-    
+
     def _copy_listings_to_clipboard(self) -> None:
         """Copy all listings to clipboard in tab-separated format for Excel."""
         if not Exchange.listings:
             _logger.warning("No listings available to copy.")
             return
-        
+
         lines = []
-        
+
         # Sort listings by name for consistent output
         sorted_listings = sorted(
-            Exchange.listings.values(),
-            key=lambda listing: listing.name
+            Exchange.listings.values(), key=lambda listing: listing.name
         )
-        
+
         # Add each listing
         for listing in sorted_listings:
-            lines.append(f"{listing.name}\t{listing.current_price/100 if listing.current_price > 0 else 'N/A'}")
-        
+            lines.append(
+                f"{listing.name}\t{listing.current_price/100 if listing.current_price > 0 else 'N/A'}"
+            )
+
         # Join with newlines
         table_text = "\n".join(lines)
-        
+
         # Copy to clipboard
         clipboard = QApplication.clipboard()
         clipboard.setText(table_text)
-        
+
         _logger.info(f"Copied {len(sorted_listings)} listings to clipboard.")
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -109,10 +119,11 @@ class MainWindow(QMainWindow):
 
         # Stop RecipeWorker thread
         _logger.debug("Stopping RecipeWorker thread.")
-        self.recipe_worker_thread.requestInterruption()
+        self.api_thread.requestInterruption()
         self.recipe_worker.wake_up()
-        self.recipe_worker_thread.quit()
-        if self.recipe_worker_thread.wait(5000):
+        self.company_data_manager.request_stop()
+        self.api_thread.quit()
+        if self.api_thread.wait(5000):
             _logger.debug("RecipeWorker thread has stopped successfully.")
         else:
             _logger.debug("RecipeWorker thread did not stop in time.")
