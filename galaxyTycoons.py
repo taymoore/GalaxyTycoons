@@ -39,17 +39,19 @@ class MainWindow(QMainWindow):
         self.recipe_worker = RecipeWorker(
             GameDataManager.get().recipes, self.settings.tech_level_maximums
         )
-        self.api_thread = QThread(self)
-        self.api_thread.setObjectName("APIThread")
-        self.recipe_worker.moveToThread(self.api_thread)
-        self.api_thread.started.connect(self.recipe_worker.run)
+        self.recipe_worker_thread = QThread(self)
+        self.recipe_worker_thread.setObjectName("APIThread")
+        self.recipe_worker.moveToThread(self.recipe_worker_thread)
+        self.recipe_worker_thread.started.connect(self.recipe_worker.run)
         self.recipe_worker.finished.connect(self.recipe_worker.deleteLater)
-        self.api_thread.finished.connect(self.api_thread.deleteLater)
+        self.recipe_worker_thread.finished.connect(self.recipe_worker_thread.deleteLater)
 
-        # Create company data manager
-        self.company_data_manager = CompanyDataManager(self)
-        self.company_data_manager.moveToThread(self.api_thread)
-        self.api_thread.finished.connect(self.company_data_manager.deleteLater)
+        # Create company data manager on its own thread to avoid blocking
+        self.company_data_manager = CompanyDataManager()
+        self.company_thread = QThread(self)
+        self.company_thread.setObjectName("CompanyThread")
+        self.company_data_manager.moveToThread(self.company_thread)
+        self.company_thread.finished.connect(self.company_data_manager.deleteLater)
         self.fetch_company_signal.connect(self.company_data_manager.fetch_company)
 
         # Initialize the sub-windows
@@ -60,8 +62,9 @@ class MainWindow(QMainWindow):
             self, self.settings, self.recipe_worker
         )
 
-        # Start api threads
-        self.api_thread.start()
+        # Start background threads
+        self.recipe_worker_thread.start()
+        self.company_thread.start()
 
         # Add tabs
         self.tabs.addTab(self.recipe_tab, "Recipes & Profits")
@@ -83,6 +86,7 @@ class MainWindow(QMainWindow):
         if index == self.tabs.indexOf(
             self.configuration_tab
         ) or index == self.tabs.indexOf(self.investments_tab):
+            _logger.debug("Emitting fetch_company_signal due to tab change.")
             self.fetch_company_signal.emit()
 
     def _create_menubar(self) -> None:
@@ -131,15 +135,20 @@ class MainWindow(QMainWindow):
         _logger.debug("MainWindow closeEvent called.")
 
         # Stop RecipeWorker thread
-        _logger.debug("Stopping RecipeWorker thread.")
-        self.api_thread.requestInterruption()
+        _logger.debug("Stopping background threads.")
+        self.recipe_worker_thread.requestInterruption()
         self.recipe_worker.wake_up()
         self.company_data_manager.request_stop()
-        self.api_thread.quit()
-        if self.api_thread.wait(5000):
+        self.recipe_worker_thread.quit()
+        self.company_thread.quit()
+        if self.recipe_worker_thread.wait(5000):
             _logger.debug("RecipeWorker thread has stopped successfully.")
         else:
             _logger.debug("RecipeWorker thread did not stop in time.")
+        if self.company_thread.wait(5000):
+            _logger.debug("Company thread has stopped successfully.")
+        else:
+            _logger.debug("Company thread did not stop in time.")
 
         # Manually call closeEvent on tabs to trigger their specific cleanup logic
         self.recipe_tab.close()

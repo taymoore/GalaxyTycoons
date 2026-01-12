@@ -14,7 +14,7 @@ class Ship(BaseModel):
     cId: int
     warehouse_id: int = Field(alias="warehouseId")
     name: str
-    fuel: int
+    fuel: float
     condition: float
     pId: int
 

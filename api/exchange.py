@@ -52,7 +52,8 @@ class Exchange:
             if cache2_path.exists():
                 with open(cache2_path, "rb") as f:
                     listings2, _ = pickle.load(f)
-                Exchange.listings = Exchange.listings.combine_first(listings2)
+                for listing1, listing2 in zip(Exchange.listings.values(), listings2.values()):
+                    listing1.dataframe = listing1.dataframe.combine_first(listing2.dataframe)
                 # delete cache2 after merging
                 cache2_path.unlink()
                 _logger.info("Merged additional game data from second cache file.")
