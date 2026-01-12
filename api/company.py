@@ -21,7 +21,7 @@ class CompanyDataManager(QObject):
     """Manager that fetches company data on demand via slot."""
 
     company_loaded = Signal(Company)
-    # base_loaded = Signal(Base)
+    base_loaded = Signal(Base)
     error = Signal(str)
 
     def __init__(
@@ -47,27 +47,26 @@ class CompanyDataManager(QObject):
             if company:
                 _logger.info(f"Fetched company data at {datetime.now()}")
                 self.company_loaded.emit(company)
-                # for base in company.bases:
-                #     self.base_loaded.emit(base)
+                for base in company.bases:
+                    base = self.fetch_base(base.id)
         except Exception as exc:  # noqa: BLE001
             _logger.error("Error fetching company data: %s", exc)
             self.error.emit(str(exc))
         return company
 
-    # @Slot(int)
-    # def fetch_base(self, id: int) -> Optional[Base]:
-    #     """Fetch base data on demand."""
-    #     try:
-    #         base = self._fetch_with_retry(
-    #             f"https://api.g2.galactictycoons.com/public/company/base/{id}", Base
-    #         )
-    #         if base:
-    #             self.base = base
-    #             self.base_loaded.emit(base)
-    #     except Exception as exc:  # noqa: BLE001
-    #         _logger.error("Error fetching base data: %s", exc)
-    #         self.error.emit(str(exc))
-    #     return base
+    @Slot(int)
+    def fetch_base(self, id: int) -> Optional[Base]:
+        """Fetch base data on demand."""
+        try:
+            base = self._fetch_with_retry(
+                f"https://api.g2.galactictycoons.com/public/company/base/{id}", Base
+            )
+            if base:
+                self.base_loaded.emit(base)
+        except Exception as exc:  # noqa: BLE001
+            _logger.error("Error fetching base data: %s", exc)
+            self.error.emit(str(exc))
+        return base
 
     def request_stop(self) -> None:
         """Request a stop; will interrupt any ongoing waits in fetch operations."""
@@ -97,6 +96,7 @@ class CompanyDataManager(QObject):
 
             try:
                 response.raise_for_status()
+                print( response.json())
                 data = model_class.model_validate(response.json())
                 return data
             except Exception as exc:  # noqa: BLE001
