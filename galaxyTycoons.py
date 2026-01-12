@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
         self.planets_tab = PlanetsWindow(self)
         self.investments_tab = InvestmentsWindow(self)
         self.configuration_tab = ConfigurationWindow(
-            self, self.settings, self.recipe_worker
+            self, self.settings, self.recipe_worker, self.company_data_manager
         )
 
         # Start background threads

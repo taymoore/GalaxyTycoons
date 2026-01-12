@@ -53,99 +53,11 @@ from api.gameData import GameDataManager
 from api.models.gameData import Recipe, Specialization, Building, WorkerType
 from api.exchange import Exchange
 from api.models.exchange import Listing
+from api.company import CompanyDataManager
+from api.models.company import Company, Base, BuildingType
 from recipeWorker import RecipeWorker
 
 _logger = logging.getLogger(__name__)
-
-
-class PlanetNameDelegate(QStyledItemDelegate):
-    """Custom delegate that provides a dropdown/autocomplete for planet names (parent) and building names (child)."""
-    
-    def __init__(self, planet_names: List[str], building_names: List[str], parent=None):
-        super().__init__(parent)
-        self.planet_names = sorted(planet_names)
-        self.building_names = sorted(building_names)
-    
-    def createEditor(self, parent, option, index):
-        """Create a combobox editor with planet or building names."""
-        # Only apply to column 0 (Name)
-        if index.column() == 0:
-            combo = QComboBox(parent)
-            combo.setEditable(True)
-            combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-            
-            # Check if this is a parent or child item
-            model = index.model()
-            if model:
-                parent_index = index.parent()
-                if parent_index.isValid():
-                    # This is a child item - use building names
-                    combo.addItems(self.building_names)
-                else:
-                    # This is a parent item - use planet names
-                    combo.addItems(self.planet_names)
-            
-            combo.setMaxVisibleItems(15)
-            # Enable autocomplete
-            combo.completer().setCompletionMode(combo.completer().CompletionMode.PopupCompletion)
-            combo.completer().setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-            return combo
-        return super().createEditor(parent, option, index)
-    
-    def setEditorData(self, editor, index):
-        """Set the current value in the editor."""
-        if isinstance(editor, QComboBox):
-            value = index.data(Qt.ItemDataRole.DisplayRole)
-            if value:
-                idx = editor.findText(value)
-                if idx >= 0:
-                    editor.setCurrentIndex(idx)
-                else:
-                    editor.setEditText(value)
-        else:
-            super().setEditorData(editor, index)
-    
-    def setModelData(self, editor, model, index):
-        """Store the edited value back to the model."""
-        if isinstance(editor, QComboBox):
-            value = editor.currentText()
-            model.setData(index, value, Qt.ItemDataRole.EditRole)
-        else:
-            super().setModelData(editor, model, index)
-
-
-class IntegerDelegate(QStyledItemDelegate):
-    """Custom delegate that restricts input to integers greater than 0."""
-    
-    def createEditor(self, parent, option, index):
-        """Create a line edit for integer input."""
-        from PySide6.QtWidgets import QLineEdit
-        from PySide6.QtGui import QIntValidator
-        
-        editor = QLineEdit(parent)
-        validator = QIntValidator(1, 999999, editor)  # Min: 1, Max: 999999
-        editor.setValidator(validator)
-        return editor
-    
-    def setEditorData(self, editor, index):
-        """Set the current value in the editor."""
-        from PySide6.QtWidgets import QLineEdit
-        if isinstance(editor, QLineEdit):
-            value = index.data(Qt.ItemDataRole.DisplayRole)
-            if value:
-                editor.setText(str(value))
-        else:
-            super().setEditorData(editor, index)
-    
-    def setModelData(self, editor, model, index):
-        """Store the edited value back to the model."""
-        from PySide6.QtWidgets import QLineEdit
-        if isinstance(editor, QLineEdit):
-            text = editor.text()
-            if text and text.isdigit() and int(text) > 0:
-                model.setData(index, text, Qt.ItemDataRole.EditRole)
-        else:
-            super().setModelData(editor, model, index)
 
 
 class ConfigurationWindow(QWidget):
@@ -155,149 +67,103 @@ class ConfigurationWindow(QWidget):
             super().__init__(parent)
             self.settings = settings
             self.setHorizontalHeaderLabels(["Name", "Level", "Best Recipe", "Profit / hr", "Consumables"])
-            # Load data from settings or add initial empty row
-            self._load_from_settings()
             
-        def _add_empty_parent_row(self):
-            """Add an empty row at parent level."""
-            name_item = QStandardItem("")
-            level_item = QStandardItem("")
-            recipe_item = QStandardItem("")
-            profit_item = QStandardItem("")
-            consumables_item = QStandardItem("")
-            name_item.setEditable(True)
-            level_item.setEditable(False)
-            recipe_item.setEditable(False)
-            profit_item.setEditable(False)
-            consumables_item.setEditable(False)
-            self.appendRow([name_item, level_item, recipe_item, profit_item, consumables_item])
+        def populate_from_company(self, company: Company):
+            """Populate tree from Company data (creates placeholder rows for bases)."""
+            self.clear()
+            self.setHorizontalHeaderLabels(["Name", "Level", "Best Recipe", "Profit / hr", "Consumables"])
             
-        def _add_empty_child_row(self, parent_item: QStandardItem):
-            """Add an empty row at child level."""
-            name_item = QStandardItem("")
-            level_item = QStandardItem("")
-            recipe_item = QStandardItem("")
-            profit_item = QStandardItem("")
-            consumables_item = QStandardItem("")
-            name_item.setEditable(True)
-            level_item.setEditable(True)
-            recipe_item.setEditable(False)
-            profit_item.setEditable(False)
-            consumables_item.setEditable(False)
-            parent_item.appendRow([name_item, level_item, recipe_item, profit_item, consumables_item])
+            game_data = GameDataManager.get()
+            
+            # Create a mapping of planet_id to planet name
+            planet_map = {}
+            for system in game_data.systems:
+                if system.planets:
+                    for planet in system.planets:
+                        planet_map[planet.id] = planet.name
+            
+            # Create placeholder rows for each base (buildings will be added via base_loaded signal)
+            for base in company.bases:
+                planet_name = planet_map.get(base.planet_id, f"Unknown Planet {base.planet_id}")
+                
+                # Create parent item for planet/base
+                name_item = QStandardItem(f"{planet_name} - {base.name}")
+                level_item = QStandardItem("")
+                recipe_item = QStandardItem("")
+                profit_item = QStandardItem("")
+                consumables_item = QStandardItem("")
+                
+                # Make parent row non-editable
+                name_item.setEditable(False)
+                level_item.setEditable(False)
+                recipe_item.setEditable(False)
+                profit_item.setEditable(False)
+                consumables_item.setEditable(False)
+                
+                # Store base ID for later lookup
+                name_item.setData(base.id, Qt.ItemDataRole.UserRole)
+                
+                self.appendRow([name_item, level_item, recipe_item, profit_item, consumables_item])
         
-        def _load_from_settings(self):
-            """Load tree data from settings."""
-            configurations = self.settings.configurations
-            if configurations:
-                for config in configurations:
-                    name_item = QStandardItem(config.get("name", ""))
-                    level_item = QStandardItem(config.get("level", ""))
-                    recipe_item = QStandardItem(config.get("recipe", ""))
-                    profit_item = QStandardItem(config.get("profit", ""))
-                    consumables_item = QStandardItem(config.get("consumables", ""))
-                    name_item.setEditable(True)
-                    level_item.setEditable(False)
-                    recipe_item.setEditable(False)
-                    profit_item.setEditable(False)
-                    consumables_item.setEditable(False)
-                    self.appendRow([name_item, level_item, recipe_item, profit_item, consumables_item])
-                    
-                    # Add children
-                    children = config.get("children", [])
-                    for child in children:
-                        child_name_item = QStandardItem(child.get("name", ""))
-                        child_level_item = QStandardItem(child.get("level", ""))
-                        child_recipe_item = QStandardItem(child.get("recipe", ""))
-                        child_profit_item = QStandardItem(child.get("profit", ""))
-                        child_consumables_item = QStandardItem(child.get("consumables", ""))
-                        child_name_item.setEditable(True)
-                        child_level_item.setEditable(True)
-                        child_recipe_item.setEditable(False)
-                        child_profit_item.setEditable(False)
-                        child_consumables_item.setEditable(False)
-                        name_item.appendRow([child_name_item, child_level_item, child_recipe_item, child_profit_item, child_consumables_item])
-                    
-                    # Recalculate profit for all loaded children
-                    for child_row in range(name_item.rowCount()):
-                        child_index = name_item.child(child_row, 0).index()
-                        if child_index.isValid():
-                            # Skip empty rows (no name)
-                            child_name = name_item.child(child_row, 0).text()
-                            if child_name:
-                                self._update_best_recipe(child_index)
-                    
-                    # Add empty child row for display (non-editable)
-                    self._add_empty_child_row(name_item)
+        def populate_base_buildings(self, base: Base):
+            """Populate buildings for a specific base."""
+            game_data = GameDataManager.get()
+            building_map = {building.id: building for building in game_data.buildings}
             
-            # Always add an empty parent row at the end
-            self._add_empty_parent_row()
-        
-        def save_to_settings(self):
-            """Save tree data to settings."""
-            configurations = []
+            # Find the parent item for this base
+            parent_item = None
             for row in range(self.rowCount()):
-                parent_name = self.item(row, 0)
-                parent_level = self.item(row, 1)
-                parent_recipe = self.item(row, 2)
-                parent_profit = self.item(row, 3)
-                parent_consumables = self.item(row, 4)
-                
-                # Skip empty parent rows
-                if not parent_name.text():
-                    continue
-                
-                config = {
-                    "name": parent_name.text(),
-                    "level": parent_level.text(),
-                    "recipe": parent_recipe.text(),
-                    "profit": parent_profit.text(),
-                    "consumables": parent_consumables.text(),
-                    "children": []
-                }
-                
-                # Add children
-                for child_row in range(parent_name.rowCount()):
-                    child_name = parent_name.child(child_row, 0)
-                    child_level = parent_name.child(child_row, 1)
-                    child_recipe = parent_name.child(child_row, 2)
-                    child_profit = parent_name.child(child_row, 3)
-                    child_consumables = parent_name.child(child_row, 4)
-                    
-                    # Skip empty child rows
-                    if child_name and child_name.text():
-                        config["children"].append({
-                            "name": child_name.text(),
-                            "level": child_level.text() if child_level else "",
-                            "recipe": child_recipe.text() if child_recipe else "",
-                            "profit": child_profit.text() if child_profit else "",
-                            "consumables": child_consumables.text() if child_consumables else ""
-                        })
-                
-                configurations.append(config)
+                item = self.item(row, 0)
+                if item and item.data(Qt.ItemDataRole.UserRole) == base.id:
+                    parent_item = item
+                    break
             
-            self.settings.configurations = configurations
-        
-        def _update_best_recipe(self, child_row_index: QModelIndex):
-            """Calculate and update the best recipe for a child (building) row."""
-            try:
-                # Get the building name and level
-                name_item = self.itemFromIndex(child_row_index.siblingAtColumn(0))
-                
-                if not name_item:
-                    return
+            if not parent_item:
+                _logger.warning(f"Could not find parent item for base {base.id}")
+                return
+            
+            # Clear any existing children
+            parent_item.removeRows(0, parent_item.rowCount())
+            
+            # Add buildings as children
+            for slot in base.building_slots:
+                if slot.building and slot.building.type != BuildingType.UNDEFINED:
+                    building_info = building_map.get(slot.building.type)
+                    building_name = building_info.name if building_info else f"Building {slot.building.type}"
                     
-                building_name = name_item.text()
-                
-                if not building_name:
-                    return
-                
-                # Find building ID by name
+                    child_name = QStandardItem(building_name)
+                    child_level = QStandardItem(str(slot.building.level))
+                    child_recipe = QStandardItem("")
+                    child_profit = QStandardItem("")
+                    child_consumables = QStandardItem("")
+                    
+                    # Make all child items non-editable
+                    child_name.setEditable(False)
+                    child_level.setEditable(False)
+                    child_recipe.setEditable(False)
+                    child_profit.setEditable(False)
+                    child_consumables.setEditable(False)
+                    
+                    # Store building ID and level for recipe calculation
+                    child_name.setData(slot.building.type, Qt.ItemDataRole.UserRole)
+                    child_level.setData(slot.building.level, Qt.ItemDataRole.UserRole + 1)
+                    
+                    parent_item.appendRow([child_name, child_level, child_recipe, child_profit, child_consumables])
+                    
+                    # Calculate best recipe for this building
+                    self._update_best_recipe_for_building(slot.building.type, slot.building.level, 
+                                                          child_recipe, child_profit, child_consumables)
+        
+        def _update_best_recipe_for_building(self, building_type: int, building_level: int,
+                                            recipe_item: QStandardItem, profit_item: QStandardItem, 
+                                            consumables_item: QStandardItem):
+            """Calculate and update the best recipe for a building."""
+            try:
                 game_data = GameDataManager.get()
-                building_id = None
-                for building in game_data.buildings:
-                    if building.name == building_name:
-                        break
+                building = next((b for b in game_data.buildings if b.id == building_type), None)
+                
+                if not building:
+                    return
                 
                 tech_level = self.settings.tech_level_filters.get(building.specialization, float('inf'))
                 
@@ -305,31 +171,20 @@ class ConfigurationWindow(QWidget):
                 result = find_best_recipe_for_building(building.id, tech_level)
                 
                 if result is None:
-                    # Clear the fields if no recipe found
-                    recipe_item = self.itemFromIndex(child_row_index.siblingAtColumn(2))
-                    profit_item = self.itemFromIndex(child_row_index.siblingAtColumn(3))
-                    consumables_item = self.itemFromIndex(child_row_index.siblingAtColumn(4))
-                    if recipe_item:
-                        recipe_item.setText("")
-                    if profit_item:
-                        profit_item.setText("")
-                    if consumables_item:
-                        consumables_item.setText("")
                     return
                 
                 recipe_name, profit, consumables_preferred, consumables_rejected = result
                 
+                # Adjust profit for building level
+                adjusted_profit = profit * building_level
+                
                 consumables_text = format_consumables(consumables_preferred, consumables_rejected)
                 
                 # Update the items
-                recipe_item = self.itemFromIndex(child_row_index.siblingAtColumn(2))
-                profit_item = self.itemFromIndex(child_row_index.siblingAtColumn(3))
-                consumables_item = self.itemFromIndex(child_row_index.siblingAtColumn(4))
-                
                 if recipe_item:
                     recipe_item.setText(recipe_name)
                 if profit_item:
-                    profit_item.setText(f"{profit:,.2f}")
+                    profit_item.setText(f"{adjusted_profit:,.2f}")
                 if consumables_item:
                     consumables_item.setText(consumables_text)
                     # Set tooltip
@@ -347,56 +202,29 @@ class ConfigurationWindow(QWidget):
                     
             except Exception as e:
                 _logger.error(f"Error updating best recipe: {e}")
-            
-        def setData(self, index: QModelIndex, value, role: int = Qt.ItemDataRole.EditRole) -> bool:
-            """Override setData to add new empty rows when user enters data."""
-            if role == Qt.ItemDataRole.EditRole and value:
-                result = super().setData(index, value, role)
-                if result:
-                    item = self.itemFromIndex(index)
-                    parent_item = item.parent()
-                    
-                    if parent_item is None:
-                        # This is a parent-level item
-                        # Check if this is the last row
-                        row = index.row()
-                        if row == self.rowCount() - 1:
-                            # Check if any cell in this row has data
-                            has_data = False
-                            for col in range(self.columnCount()):
-                                cell_index = self.index(row, col)
-                                if self.data(cell_index, Qt.ItemDataRole.DisplayRole):
-                                    has_data = True
-                                    break
-                            if has_data:
-                                self._add_empty_parent_row()
-                                # Add an empty child row to the newly filled parent
-                                name_item = self.item(row, 0)
-                                self._add_empty_child_row(name_item)
-                    else:
-                        # This is a child-level item
-                        child_row = item.row()
+        
+        def recalculate_all_recipes(self):
+            """Recalculate best recipes for all buildings in the tree."""
+            for parent_row in range(self.rowCount()):
+                parent_item = self.item(parent_row, 0)
+                if parent_item:
+                    for child_row in range(parent_item.rowCount()):
+                        child_name = parent_item.child(child_row, 0)
+                        child_level = parent_item.child(child_row, 1)
+                        child_recipe = parent_item.child(child_row, 2)
+                        child_profit = parent_item.child(child_row, 3)
+                        child_consumables = parent_item.child(child_row, 4)
                         
-                        # If name or level was updated, recalculate best recipe
-                        if index.column() in (0, 1):  # Name or Level column
-                            self._update_best_recipe(index)
-                        
-                        # Check if this is the last child row
-                        parent_row_count = parent_item.rowCount()
-                        if child_row == parent_row_count - 1:
-                            # Check if any cell in this child row has data
-                            has_data = False
-                            for col in range(self.columnCount()):
-                                sibling = parent_item.child(child_row, col)
-                                if sibling and sibling.text():
-                                    has_data = True
-                                    break
-                            if has_data:
-                                self._add_empty_child_row(parent_item)
-                    # Save to settings after any data change
-                    self.save_to_settings()
-                return result
-            return super().setData(index, value, role)
+                        if child_name and child_level:
+                            building_type = child_name.data(Qt.ItemDataRole.UserRole)
+                            building_level = child_level.data(Qt.ItemDataRole.UserRole + 1)
+                            
+                            if building_type and building_level:
+                                self._update_best_recipe_for_building(
+                                    building_type, building_level,
+                                    child_recipe, child_profit, child_consumables
+                                )
+
 
 
     class ConfigurationTreeView(QTreeView):
@@ -407,70 +235,13 @@ class ConfigurationWindow(QWidget):
             self.header().setSectionResizeMode(
                 QHeaderView.ResizeMode.ResizeToContents
             )
-            self.setEditTriggers(
-                QAbstractItemView.EditTrigger.DoubleClicked | 
-                QAbstractItemView.EditTrigger.EditKeyPressed
-            )
+            # Make tree view read-only
+            self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-            self.setExpandsOnDoubleClick(False)
+            self.setExpandsOnDoubleClick(True)
             self.setRootIsDecorated(True)
             self.setAlternatingRowColors(True)
-            
-            # Enable context menu
-            self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            self.customContextMenuRequested.connect(self.show_context_menu)
-
-        def show_context_menu(self, position):
-            """Display context menu for row deletion."""
-            index = self.indexAt(position)
-            if not index.isValid():
-                return
-            
-            # Don't show menu for empty rows
-            model = self.model()
-            if model:
-                # Check if row has any data
-                has_data = False
-                for col in range(model.columnCount()):
-                    sibling = index.siblingAtColumn(col)
-                    if sibling.data(Qt.ItemDataRole.DisplayRole):
-                        has_data = True
-                        break
-                
-                if not has_data:
-                    return
-            
-            menu = QMenu(self)
-            delete_action = QAction("Delete", self)
-            delete_action.triggered.connect(lambda: self.delete_row(index))
-            menu.addAction(delete_action)
-            menu.exec(self.viewport().mapToGlobal(position))
-        
-        def delete_row(self, index):
-            """Delete the row at the given index."""
-            if not index.isValid():
-                return
-            
-            model = self.model()
-            if not model:
-                return
-            
-            # Get the parent index to determine if this is a parent or child row
-            parent_index = index.parent()
-            
-            if parent_index.isValid():
-                # This is a child row
-                parent_item = model.itemFromIndex(parent_index)
-                if parent_item:
-                    parent_item.removeRow(index.row())
-            else:
-                # This is a parent row
-                model.removeRow(index.row())
-            
-            # Save changes to settings
-            if hasattr(model, 'save_to_settings'):
-                model.save_to_settings()
 
         def setModel(self, model: QStandardItemModel) -> None:
             """Override setModel to connect signals for dynamic resizing."""
@@ -519,78 +290,50 @@ class ConfigurationWindow(QWidget):
             # self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
             # self.sort(1, Qt.SortOrder.DescendingOrder)
 
-    def __init__(self, parent: QWidget | None = None, settings=None, recipe_worker=None) -> None:
+    def __init__(self, parent: QWidget | None = None, settings=None, recipe_worker=None, company_manager=None) -> None:
         super().__init__(parent)
         self.settings = settings
         self.recipe_worker = recipe_worker
+        self.company_manager = company_manager
 
         # Main layout
         self.main_layout = QVBoxLayout()
         self.setLayout(self.main_layout)
-
-        # Get all planet names and building names from gameData
-        planet_names = self._get_planet_names()
-        building_names = self._get_building_names()
 
         # Configuration tree
         self.configuration_tree_model = ConfigurationWindow.ConfigurationTreeModel(self, settings)
         self.configuration_tree_view = ConfigurationWindow.ConfigurationTreeView(self)
         self.configuration_tree_view.setModel(self.configuration_tree_model)
         
-        # Set custom delegate for Name column
-        planet_delegate = PlanetNameDelegate(planet_names, building_names, self)
-        self.configuration_tree_view.setItemDelegateForColumn(0, planet_delegate)
-        
-        # Set custom delegate for Level column (integers > 0)
-        level_delegate = IntegerDelegate(self)
-        self.configuration_tree_view.setItemDelegateForColumn(1, level_delegate)
-        
         # Set custom delegate for Consumables column (mixed-color text)
         consumables_delegate = ConsumablesDelegate(self)
         self.configuration_tree_view.setItemDelegateForColumn(4, consumables_delegate)
         
-        # Calculate and set minimum width for Name column based on contents
-        font_metrics = self.fontMetrics()
-        all_names = planet_names + building_names
-        max_name_width = 0
-        if all_names:
-            max_name_width = max(font_metrics.horizontalAdvance(name) for name in all_names)
-        
-        # Add padding for tree decoration, indentation, and combobox arrow (100px margin)
-        required_width = max_name_width + 100
-        self.configuration_tree_view.header().setMinimumSectionSize(required_width)
-        self.configuration_tree_view.setColumnWidth(0, required_width)
-        
         self.main_layout.addWidget(self.configuration_tree_view)
+        
+        # Connect to company manager's signals
+        if self.company_manager:
+            self.company_manager.company_loaded.connect(self.handle_company_loaded)
+            self.company_manager.base_loaded.connect(self.handle_base_loaded)
         
         # Connect to recipe worker's exchange update signal
         if self.recipe_worker:
             self.recipe_worker.exchange_updated_signal.connect(self.handle_exchange_updated)
     
-    def _get_planet_names(self) -> List[str]:
-        """Extract all planet names from gameData."""
-        planet_names = []
-        game_data = GameDataManager.get()
-        for system in game_data.systems:
-            if system.planets:
-                for planet in system.planets:
-                    planet_names.append(planet.name)
-        return planet_names
+    @Slot(Company)
+    def handle_company_loaded(self, company: Company) -> None:
+        """Handle company data loaded from CompanyDataManager."""
+        self.configuration_tree_model.populate_from_company(company)
+        self.configuration_tree_view.expandAll()
     
-    def _get_building_names(self) -> List[str]:
-        """Extract all building names from gameData."""
-        game_data = GameDataManager.get()
-        return [building.name for building in game_data.buildings]
+    @Slot(Base)
+    def handle_base_loaded(self, base: Base) -> None:
+        """Handle individual base data loaded from CompanyDataManager."""
+        self.configuration_tree_model.populate_base_buildings(base)
+        self.configuration_tree_view.expandAll()
     
     @Slot()
     def handle_exchange_updated(self) -> None:
-        """Recalculate all child rows when exchange listings are updated."""
-        for parent_row in range(self.configuration_tree_model.rowCount()):
-            parent_index = self.configuration_tree_model.index(parent_row, 0)
-            parent_item = self.configuration_tree_model.itemFromIndex(parent_index)
-            
-            if parent_item:
-                # Iterate through all child rows
-                for child_row in range(parent_item.rowCount()):
-                    child_index = parent_item.child(child_row, 0).index()
-                    self.configuration_tree_model._update_best_recipe(child_index)
+        """Recalculate all building recipes when exchange listings are updated."""
+        self.configuration_tree_model.recalculate_all_recipes()
+
