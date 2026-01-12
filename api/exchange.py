@@ -18,11 +18,12 @@ _logger = logging.getLogger(__name__)
 
 class Exchange:
     """Manages exchange listings caching, fetching, and retrieval."""
-    
+
     _CACHE_FILENAME = "exchange.pkl"
+    _CACHE2_FILENAME = "exchange2.pkl"
     _CACHE_DIR = ".data"
     _UPDATE_RATE = timedelta(minutes=5)
-    
+
     listings: Dict[int, Listing] = {}
     updated_time: Optional[datetime] = None
     session = Session()
@@ -44,6 +45,19 @@ class Exchange:
         except Exception as e:
             _logger.error(f"Unexpected error loading cache: {e}")
             Exchange.listings = {}
+
+        # Merge with cache2 if exists
+        cache2_path = Path(Exchange._CACHE_DIR) / Exchange._CACHE2_FILENAME
+        try:
+            if cache2_path.exists():
+                with open(cache2_path, "rb") as f:
+                    listings2, _ = pickle.load(f)
+                Exchange.listings = Exchange.listings.combine_first(listings2)
+                # delete cache2 after merging
+                cache2_path.unlink()
+                _logger.info("Merged additional game data from second cache file.")
+        except (pickle.UnpicklingError, IOError) as e:
+            _logger.error(f"Error loading second cache from {cache2_path}: {e}")
 
     @staticmethod
     def _save_to_disk() -> None:
@@ -69,12 +83,13 @@ class Exchange:
     def update_listings(force: bool = False):
         current_time = datetime.now()
         if not force and (
-            Exchange.updated_time and current_time - Exchange.updated_time < Exchange._UPDATE_RATE
+            Exchange.updated_time
+            and current_time - Exchange.updated_time < Exchange._UPDATE_RATE
         ):
             return
 
         url = "https://api.g2.galactictycoons.com/public/exchange/mat-details/"
-        
+
         api_key = os.getenv("GT_API_KEY")
         headers = {}
         if api_key:
@@ -108,11 +123,19 @@ class Exchange:
             if listing.id in Exchange.listings:
                 listing.dataframe = Exchange.listings[listing.id].dataframe
             # Add current data point to dataframe
-            listing.dataframe.loc[datetime.today().isoformat(), 'current_price'] = listing.current_price
-            listing.dataframe.loc[datetime.today().isoformat(), 'average_price'] = listing.average_price
-            listing.dataframe.loc[datetime.today().isoformat(), 'total_quantity_available'] = listing.total_quantity_available
+            listing.dataframe.loc[datetime.today().isoformat(), "current_price"] = (
+                listing.current_price
+            )
+            listing.dataframe.loc[datetime.today().isoformat(), "average_price"] = (
+                listing.average_price
+            )
+            listing.dataframe.loc[
+                datetime.today().isoformat(), "total_quantity_available"
+            ] = listing.total_quantity_available
             for price_history_entry in listing.price_history:
-                listing.dataframe.loc[price_history_entry.date + "T00:00:00", 'quantity_sold'] = price_history_entry.quantity_sold
+                listing.dataframe.loc[
+                    price_history_entry.date + "T00:00:00", "quantity_sold"
+                ] = price_history_entry.quantity_sold
             listing.updated_time = current_time
             Exchange.listings[listing.id] = listing
         _logger.info(
