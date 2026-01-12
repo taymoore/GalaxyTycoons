@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 import pickle
 from tkinter import SE
-from PySide6.QtCore import QSize, QThread
+from PySide6.QtCore import QSize, QThread, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QMenuBar
 from PySide6.QtGui import QAction
@@ -22,6 +22,8 @@ _logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
+    fetch_company_signal = Signal()
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Game Data Tool")
@@ -48,6 +50,7 @@ class MainWindow(QMainWindow):
         self.company_data_manager = CompanyDataManager(self)
         self.company_data_manager.moveToThread(self.api_thread)
         self.api_thread.finished.connect(self.company_data_manager.deleteLater)
+        self.fetch_company_signal.connect(self.company_data_manager.fetch_company)
 
         # Initialize the sub-windows
         self.recipe_tab = RecipeWindow(self, self.recipe_worker, self.settings)
@@ -57,7 +60,7 @@ class MainWindow(QMainWindow):
             self, self.settings, self.recipe_worker
         )
 
-        # Start the recipe worker thread
+        # Start api threads
         self.api_thread.start()
 
         # Add tabs
@@ -66,11 +69,21 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.investments_tab, "Investments")
         self.tabs.addTab(self.configuration_tab, "Configuration")
 
+        # Connect tab change signal
+        self.tabs.currentChanged.connect(self.handle_tab_change)
+
         # Set the tabs as the central widget
         self.setCentralWidget(self.tabs)
 
         # Create menubar
         self._create_menubar()
+
+    def handle_tab_change(self, index: int) -> None:
+        # If index is Configuration or Investments tab
+        if index == self.tabs.indexOf(
+            self.configuration_tab
+        ) or index == self.tabs.indexOf(self.investments_tab):
+            self.fetch_company_signal.emit()
 
     def _create_menubar(self) -> None:
         """Create the menubar with export options."""

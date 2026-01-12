@@ -39,11 +39,13 @@ class CompanyDataManager(QObject):
     @Slot()
     def fetch_company(self) -> Optional[Company]:
         """Fetch company data on demand."""
+        _logger.info("Starting company data fetch...")
         try:
             company = self._fetch_with_retry(
                 "https://api.g2.galactictycoons.com/public/company", Company
             )
             if company:
+                _logger.info(f"Fetched company data at {datetime.now()}")
                 self.company_loaded.emit(company)
                 # for base in company.bases:
                 #     self.base_loaded.emit(base)
