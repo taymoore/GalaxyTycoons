@@ -52,6 +52,7 @@ class CompanyDataManager(QObject):
         except Exception as exc:  # noqa: BLE001
             _logger.error("Error fetching company data: %s", exc)
             self.error.emit(str(exc))
+            company = None
         return company
 
     @Slot(int)
@@ -93,10 +94,12 @@ class CompanyDataManager(QObject):
                     "Rate limited on company fetch; delaying for %.2fs", delay
                 )
                 continue
+            elif response.status_code == 403:
+                raise PermissionError("Access forbidden: check your API key.")
 
             try:
                 response.raise_for_status()
-                print( response.json())
+                print(response.json())
                 data = model_class.model_validate(response.json())
                 return data
             except Exception as exc:  # noqa: BLE001
