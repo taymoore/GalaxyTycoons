@@ -167,6 +167,59 @@ class GradientColorDelegate(QStyledItemDelegate):
         super().paint(painter, option, index)
 
 
+class BuildingColorDelegate(QStyledItemDelegate):
+    """Custom delegate that renders cells with unique background colors for each building type using a colormap."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.building_colors = {}  # Maps building name to QColor
+        self.colormap = cm.get_cmap(
+            "tab20b"
+        )  # Use tab20b colormap with 20 distinct colors
+
+    def _get_building_color(self, building_name: str) -> QColor:
+        """Get or assign a color for a building."""
+        if building_name not in self.building_colors:
+            # Use hash-based approach for consistent colors
+            hash_digest = hashlib.md5(building_name.encode()).hexdigest()
+            hash_value = int(hash_digest[:8], 16)
+            color_index = hash_value % 20
+
+            # Get normalized value between 0 and 1
+            normalized_value = color_index / 20.0
+            # Get color from colormap
+            rgba = self.colormap(normalized_value)
+            # Convert to QColor (rgba is tuple of 0-1 values)
+            self.building_colors[building_name] = QColor(
+                int(rgba[0] * 255),
+                int(rgba[1] * 255),
+                int(rgba[2] * 255),
+                int(rgba[3] * 255),
+            )
+        return self.building_colors[building_name]
+
+    def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
+        """Paint the cell with background color based on building name."""
+        # Get the text which contains the building name
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        if not text:
+            return super().paint(painter, option, index)
+
+        building_name = str(text)
+        color = self._get_building_color(building_name)
+
+        # Initialize style option
+        self.initStyleOption(option, index)
+
+        # Draw the background with the building color
+        painter.save()
+        painter.fillRect(option.rect, color)
+        painter.restore()
+
+        # Draw the text using the default delegate
+        super().paint(painter, option, index)
+
+
 class SpecializationColorDelegate(QStyledItemDelegate):
     """Custom delegate that renders cells with unique background colors for each specialization using a colormap."""
 

@@ -597,6 +597,7 @@ class RecipeWindow(QWidget):
                 "Vel.",
                 "Value",
                 "Tech Req.",
+                "Building",
                 "Consumables",
             ]
             # Track min/max values for gradient coloring
@@ -661,6 +662,9 @@ class RecipeWindow(QWidget):
             row.append(
                 f"{GameDataManager.get_building(recipe.producedIn).specialization.name} {recipe.reqTech}"
             )
+            row.append(
+                f"{GameDataManager.get_building(recipe.producedIn).name}"
+            )
             row.append(format_consumables(consumable_preferred, consumable_rejected))
 
             self.recipes.append(recipe)
@@ -694,13 +698,13 @@ class RecipeWindow(QWidget):
             consumable_rejected: tuple[int, ...],
         ) -> None:
             """Update consumables data and text for a specific row."""
-            self.table_data[row][5] = format_consumables(
+            self.table_data[row][6] = format_consumables(
                 consumable_preferred, consumable_rejected
             )
             self.consumables_data[row] = (consumable_preferred, consumable_rejected)
 
             # Emit dataChanged for the consumables column
-            consumables_index = self.index(row, 5)
+            consumables_index = self.index(row, 6)
             self.dataChanged.emit(consumables_index, consumables_index)
 
         def update_value(self, row: int, value: float) -> None:
@@ -1107,7 +1111,7 @@ class RecipeWindow(QWidget):
 
         # Apply custom delegate to consumables column
         consumables_delegate = ConsumablesDelegate(self)
-        self.recipe_table_view.setItemDelegateForColumn(5, consumables_delegate)
+        self.recipe_table_view.setItemDelegateForColumn(6, consumables_delegate)
 
         # Apply gradient color delegates to profit and quantity columns
         self.profit_delegate = GradientColorDelegate(self)
@@ -1121,6 +1125,10 @@ class RecipeWindow(QWidget):
         # Apply specialization color delegate to tech requirement column
         self.specialization_delegate = SpecializationColorDelegate(self)
         self.recipe_table_view.setItemDelegateForColumn(4, self.specialization_delegate)
+        
+        # Apply building color delegate to building column
+        self.building_delegate = BuildingColorDelegate(self)
+        self.recipe_table_view.setItemDelegateForColumn(5, self.building_delegate)
 
         # Connect to model data changes to update delegate ranges
         self.recipe_table_model.dataChanged.connect(self.update_delegate_ranges)
