@@ -61,6 +61,7 @@ from utils import (
     ConsumablesDelegate,
     GradientColorDelegate,
     SpecializationColorDelegate,
+    BuildingColorDelegate,
     format_consumables,
 )
 from api.gameData import GameDataManager
