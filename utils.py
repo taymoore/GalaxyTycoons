@@ -183,10 +183,10 @@ class BuildingColorDelegate(QStyledItemDelegate):
             # Use hash-based approach for consistent colors
             hash_digest = hashlib.md5(building_name.encode()).hexdigest()
             hash_value = int(hash_digest[:8], 16)
-            color_index = hash_value % 20
+            color_index = hash_value % 2000
 
             # Get normalized value between 0 and 1
-            normalized_value = color_index / 20.0
+            normalized_value = color_index / 2000.0
             # Get color from colormap
             rgba = self.colormap(normalized_value)
             # Convert to QColor (rgba is tuple of 0-1 values)
@@ -249,6 +249,9 @@ class SpecializationColorDelegate(QStyledItemDelegate):
                 # Fallback to hash-based approach if enum lookup fails
                 import hashlib
 
+                _logger.warn(
+                    f"Unknown specialization '{specialization_name}', using hash-based color assignment."
+                )
                 hash_digest = hashlib.md5(specialization_name.encode()).hexdigest()
                 hash_value = int(hash_digest[:8], 16)
                 color_index = hash_value % 20
