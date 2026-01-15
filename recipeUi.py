@@ -593,8 +593,8 @@ class RecipeWindow(QWidget):
             self.recipes: List[Recipe] = []
             self.header_data: List[str] = [
                 "Recipe Output",
-                "Profit / hr",
-                "Quantity Sold",
+                "$ / hr",
+                "Vel.",
                 "Value",
                 "Tech Req.",
                 "Consumables",
