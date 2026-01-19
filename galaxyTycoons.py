@@ -75,8 +75,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.investments_tab, "Investments")
         self.tabs.addTab(self.configuration_tab, "Configuration")
 
-        # Connect tab change signal
+        # Connect signals
         self.tabs.currentChanged.connect(self.handle_tab_change)
+        Exchange.exchange_updated_signal.connect(self.investments_tab.handle_exchange_updated)
 
         # Set the tabs as the central widget
         self.setCentralWidget(self.tabs)
