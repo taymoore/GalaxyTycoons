@@ -1444,6 +1444,7 @@ class RecipeWindow(QWidget):
                 QTimer.singleShot(0, lambda: process_batch(end_idx))
             else:
                 # Finished all batches
+                parent_window = self.window()
                 if hasattr(parent_window, 'statusBar'):
                     parent_window.statusBar().showMessage("Recipe recalculation complete", 3000)
         
