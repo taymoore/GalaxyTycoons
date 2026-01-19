@@ -142,6 +142,17 @@ class GameDataManager:
             raise ValueError(f"No recipe found producing item ID {item_id}.")
         return recipes
 
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def get_planet(planet_id: int):
+        """Get a planet by ID."""
+        for system in GameDataManager.get().systems:
+            if system.planets:
+                for planet in system.planets:
+                    if planet.id == planet_id:
+                        return planet
+        raise ValueError(f"Planet with ID {planet_id} not found.")
+
 
 # Initialize on import
 GameDataManager.initialize()

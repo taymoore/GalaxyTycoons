@@ -12,7 +12,7 @@ import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 from api.gameData import GameDataManager
 from api.exchange import Exchange
-from api.models.gameData import Planet, WorkerType
+from api.models.gameData import Planet, RecipeType, Specialization, WorkerType
 
 _logger = logging.getLogger(__name__)
 
@@ -249,7 +249,7 @@ class SpecializationColorDelegate(QStyledItemDelegate):
                 # Fallback to hash-based approach if enum lookup fails
                 import hashlib
 
-                _logger.warn(
+                _logger.warning(
                     f"Unknown specialization '{specialization_name}', using hash-based color assignment."
                 )
                 hash_digest = hashlib.md5(specialization_name.encode()).hexdigest()
@@ -556,7 +556,7 @@ def format_consumables(preferred: tuple[int, ...], rejected: tuple[int, ...]) ->
 
 
 def find_best_recipe_for_building(
-    building_id: int, tech_level: int = float("inf")
+    building_id: int, tech_level: int = float("inf"), planet: Optional[Planet] = None
 ) -> None | Tuple[str, float, tuple[int, ...], tuple[int, ...]]:
     """
     Find the best recipe (highest profit/hr) for a given building and tech level.
@@ -564,13 +564,13 @@ def find_best_recipe_for_building(
     Args:
         building_id: ID of the building
         tech_level: Technology level filter
+        planet: Optional planet for resource abundance consideration
 
     Returns:
         None | tuple[str, float, tuple[int, ...], tuple[int, ...]]: Recipe name, profit/hr, preferred consumables, and rejected consumables
     """
     try:
         game_data = GameDataManager.get()
-        building = GameDataManager.get_building(building_id)
 
         best_recipe = None
         best_profit = float("-inf")
@@ -583,20 +583,37 @@ def find_best_recipe_for_building(
                 continue
             if recipe.reqTech > tech_level:
                 continue
-            if len(recipe.inputs) == 0:
-                continue
+            if recipe.type == RecipeType.PRODUCTION:
+                result = calculate_profit_and_consumables(recipe)
 
-            result = calculate_profit_and_consumables(recipe)
+                if result is None:
+                    continue
 
-            if result is None:
-                continue
+                profit, preferred, rejected = result
+                if profit > best_profit:
+                    best_profit = profit
+                    best_recipe = recipe
+                    best_preferred = preferred
+                    best_rejected = rejected
+            elif recipe.type == RecipeType.EXTRACTION and planet is not None:
+                # Check if planet has the resource
+                planet_material = next(
+                    (mat for mat in planet.mats if mat.id == recipe.output.id), None
+                )
+                if planet_material is None:
+                    continue
+                result = calculate_profit_and_consumables(
+                    recipe, abundance=planet_material.ab / 100.0
+                )
+                if result is None:
+                    continue
 
-            profit, preferred, rejected = result
-            if profit > best_profit:
-                best_profit = profit
-                best_recipe = recipe
-                best_preferred = preferred
-                best_rejected = rejected
+                profit, preferred, rejected = result
+                if profit > best_profit:
+                    best_profit = profit
+                    best_recipe = recipe
+                    best_preferred = preferred
+                    best_rejected = rejected
 
         if best_recipe is None:
             return None
@@ -612,17 +629,17 @@ def find_best_recipe_for_building(
         return None
 
 
-def find_resource_extraction_value(planet: Planet, building: Optional[int]):
-    resource_values = []
-    for material in planet.mats:
-        recipes = GameDataManager.get_recipe_by_output(material.id)
-        for recipe in recipes:
-            if building is not None and recipe.producedIn != building:
-                continue
-            extraction_value = calculate_profit_and_consumables(
-                recipe, abundance=material.ab
-            )
-            if extraction_value is not None:
-                profit, _, _ = extraction_value
-                resource_values.append((material.id, profit))
-    return resource_values
+# def find_resource_extraction_value(planet: Planet, building: Optional[int]):
+#     resource_values = []
+#     for material in planet.mats:
+#         recipes = GameDataManager.get_recipe_by_output(material.id)
+#         for recipe in recipes:
+#             if building is not None and recipe.producedIn != building:
+#                 continue
+#             extraction_value = calculate_profit_and_consumables(
+#                 recipe, abundance=material.ab
+#             )
+#             if extraction_value is not None:
+#                 profit, _, _ = extraction_value
+#                 resource_values.append((material.id, profit))
+#     return resource_values

@@ -59,6 +59,7 @@ import pyqtgraph as pg
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
+from settings import Settings
 from utils import (
     align_add,
     find_best_recipe_for_building,
@@ -66,7 +67,7 @@ from utils import (
     format_consumables,
 )
 from api.gameData import GameDataManager
-from api.models.gameData import Recipe, Specialization, Building, WorkerType
+from api.models.gameData import Planet, Recipe, Specialization, Building, WorkerType
 from api.exchange import Exchange
 from api.models.exchange import Listing
 from api.company import CompanyDataManager
@@ -79,7 +80,7 @@ _logger = logging.getLogger(__name__)
 class ConfigurationWindow(QWidget):
 
     class ConfigurationTreeModel(QStandardItemModel):
-        def __init__(self, parent: QObject, settings):
+        def __init__(self, parent: QObject, settings: Settings):
             super().__init__(parent)
             self.settings = settings
             self.setHorizontalHeaderLabels(
@@ -191,19 +192,19 @@ class ConfigurationWindow(QWidget):
                     # Calculate best recipe for this building
                     self._update_best_recipe_for_building(
                         slot.building.type,
-                        slot.building.level,
                         child_recipe,
                         child_profit,
                         child_consumables,
+                        GameDataManager.get_planet(base.planet_id),
                     )
 
         def _update_best_recipe_for_building(
             self,
             building_type: int,
-            building_level: int,
             recipe_item: QStandardItem,
             profit_item: QStandardItem,
             consumables_item: QStandardItem,
+            planet: Planet,
         ):
             """Calculate and update the best recipe for a building."""
             try:
@@ -220,7 +221,7 @@ class ConfigurationWindow(QWidget):
                 )
 
                 # Calculate best recipe
-                result = find_best_recipe_for_building(building.id, tech_level)
+                result = find_best_recipe_for_building(building.id, tech_level, planet)
 
                 if result is None:
                     return
