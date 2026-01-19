@@ -77,7 +77,9 @@ class MainWindow(QMainWindow):
 
         # Connect signals
         self.tabs.currentChanged.connect(self.handle_tab_change)
-        Exchange.exchange_updated_signal.connect(self.investments_tab.handle_exchange_updated)
+        # Get the Exchange instance and connect its signal
+        exchange_instance = Exchange()
+        exchange_instance.exchange_updated_signal.connect(self.investments_tab.handle_exchange_updated)
 
         # Set the tabs as the central widget
         self.setCentralWidget(self.tabs)
