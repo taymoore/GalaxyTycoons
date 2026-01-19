@@ -28,7 +28,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Game Data Tool")
         self.resize(QSize(1400, 800))
-        
+
         # Create status bar
         self.statusBar().showMessage("Ready")
 
@@ -47,7 +47,9 @@ class MainWindow(QMainWindow):
         self.recipe_worker.moveToThread(self.recipe_worker_thread)
         self.recipe_worker_thread.started.connect(self.recipe_worker.run)
         self.recipe_worker.finished.connect(self.recipe_worker.deleteLater)
-        self.recipe_worker_thread.finished.connect(self.recipe_worker_thread.deleteLater)
+        self.recipe_worker_thread.finished.connect(
+            self.recipe_worker_thread.deleteLater
+        )
 
         # Create company data manager on its own thread to avoid blocking
         self.company_data_manager = CompanyDataManager()
@@ -79,7 +81,13 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self.handle_tab_change)
         # Get the Exchange instance and connect its signal
         exchange_instance = Exchange()
-        exchange_instance.exchange_updated_signal.connect(self.investments_tab.handle_exchange_updated)
+        exchange_instance.exchange_updated_signal.connect(
+            self.investments_tab.handle_exchange_updated
+        )
+        # Tech Slider change should refresh investments
+        self.recipe_tab.toolbox.techSliderChanged.connect(
+            self.investments_tab.handle_tech_slider_changed
+        )
 
         # Set the tabs as the central widget
         self.setCentralWidget(self.tabs)
@@ -104,10 +112,10 @@ class MainWindow(QMainWindow):
         copy_listings_action = QAction("Copy Listings to Clipboard", self)
         copy_listings_action.triggered.connect(self._copy_listings_to_clipboard)
         tools_menu.addAction(copy_listings_action)
-        
+
         # Add separator
         tools_menu.addSeparator()
-        
+
         # Add "All Consumables" checkbox
         self.all_consumables_action = QAction("All Consumables", self)
         self.all_consumables_action.setCheckable(True)
@@ -142,29 +150,33 @@ class MainWindow(QMainWindow):
         clipboard.setText(table_text)
 
         _logger.info(f"Copied {len(sorted_listings)} listings to clipboard.")
-        
+
     def _toggle_all_consumables(self, checked: bool) -> None:
         """Toggle the use of all consumables in profit calculations."""
         _logger.info(f"All consumables mode {'enabled' if checked else 'disabled'}")
         # Update the global flag in utils.py
         import utils
+
         utils.USE_ALL_CONSUMABLES = checked
-        
+
         # Disable the action during recalculation to prevent multiple clicks
         self.all_consumables_action.setEnabled(False)
-        self.statusBar().showMessage(f"Recalculating with {'all' if checked else 'optimal'} consumables...")
-        
+        self.statusBar().showMessage(
+            f"Recalculating with {'all' if checked else 'optimal'} consumables..."
+        )
+
         # Use a timer to allow the UI to update before starting the heavy calculation
         from PySide6.QtCore import QTimer
+
         QTimer.singleShot(100, self._perform_consumables_recalculation)
-    
+
     def _perform_consumables_recalculation(self) -> None:
         """Perform the actual recalculation after toggling consumables mode."""
         try:
             # Trigger recalculation of recipes
-            if hasattr(self, 'recipe_tab'):
+            if hasattr(self, "recipe_tab"):
                 self.recipe_tab.handle_exchange_updated()
-            if hasattr(self, 'configuration_tab'):
+            if hasattr(self, "configuration_tab"):
                 self.configuration_tab.handle_exchange_updated()
         finally:
             # Re-enable the action and clear status message

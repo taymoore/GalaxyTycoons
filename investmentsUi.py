@@ -47,8 +47,10 @@ import matplotlib.cm as cm
 from settings import Settings
 from utils import (
     align_add,
+    calculate_research_cost,
     find_best_recipe_for_building,
     calculate_profit_and_consumables,
+    find_best_recipe_for_technology,
 )
 from api.gameData import GameDataManager
 from api.models.gameData import Recipe, Specialization, Building, WorkerType
@@ -65,7 +67,6 @@ class InvestmentsWindow(QWidget):
             super().__init__(parent)
             self.settings = settings
             self.table_data: List[List[str]] = []
-            self.buildings_data: List[Building] = []
             self.header_data: List[str] = [
                 "Building & Recipe",
                 "Construction Cost",
@@ -161,15 +162,15 @@ class InvestmentsWindow(QWidget):
                     )
             return None
 
-        def populate_buildings(self) -> None:
+        def populate_investments(self) -> None:
             """Populate the table with all buildings and their ROI calculations."""
             self.beginResetModel()
             self.table_data = []
-            self.buildings_data = []
 
             try:
                 game_data = GameDataManager.get()
 
+                # Populate buildings
                 for building in game_data.buildings:
                     try:
                         # Skip worker housing buildings
@@ -233,11 +234,65 @@ class InvestmentsWindow(QWidget):
                                 roi_days,
                             ]
                         )
-                        self.buildings_data.append(building)
                     except Exception as e:
                         _logger.error(f"Error processing building {building.name}: {e}")
+
+                # Populate technologies
+                for (
+                    specialization,
+                    tech_level,
+                ) in self.settings.tech_level_filters.items():
+                    # Calculate cost
+                    research_amounts = calculate_research_cost(
+                        specialization, self.settings.tech_level_filters
+                    )
+                    cost = 0.0
+                    for amount, item_id in zip(research_amounts, (64, 65, 127, 164)):
+                        if (
+                            not Exchange.get_listing(item_id)
+                            or Exchange.get_listing(item_id).current_price <= 0
+                        ):
+                            _logger.warning(
+                                f"Excluding technology {specialization.name} level {tech_level} due to missing listing for item ID {item_id}"
+                            )
+                            cost = 0.0
+                            break
+                        cost += (
+                            amount * Exchange.get_listing(item_id).current_price / 100
+                        )
+                    if cost <= 0:
+                        continue
+
+                    # Calculate profit per hour from increased production
+                    _, current_profit_per_hour, _, _ = find_best_recipe_for_technology(
+                        specialization, tech_level
+                    )
+                    recipe_name, new_profit_per_hour, _, _ = (
+                        find_best_recipe_for_technology(specialization, tech_level + 1)
+                    )
+
+                    # Calculate ROI
+                    profit_increase_per_hour = (
+                        new_profit_per_hour - current_profit_per_hour
+                    )
+                    roi_days = (
+                        cost / profit_increase_per_hour / 24
+                        if profit_increase_per_hour > 0
+                        else float("inf")
+                    )
+
+                    # Add to table data
+                    self.table_data.append(
+                        [
+                            f"{specialization.name} Tech Level {tech_level + 1} ({recipe_name})",
+                            cost,
+                            profit_increase_per_hour,
+                            roi_days,
+                        ]
+                    )
+
             except Exception as e:
-                _logger.error(f"Error populating buildings table: {e}")
+                _logger.error(f"Error populating investments table: {e}")
 
             # Update min/max values for gradient coloring
             self._update_min_max_values()
@@ -377,7 +432,7 @@ class InvestmentsWindow(QWidget):
         self.main_layout.addWidget(self.progress_bar)
 
         # Populate the table with buildings data
-        self.investments_table_model.populate_buildings()
+        self.investments_table_model.populate_investments()
 
         # Update status label
         row_count = self.investments_table_model.rowCount()
@@ -388,10 +443,18 @@ class InvestmentsWindow(QWidget):
         # Set default sort to ROI column (ascending)
         self.investments_table_view.sortByColumn(3, Qt.SortOrder.AscendingOrder)
 
+    @Slot(Specialization, int)
+    def handle_tech_slider_changed(self, specialization, tech_level) -> None:
+        """Handle changes to the tech level filters."""
+        self.perform_recalculation()
+
     @Slot()
     def handle_exchange_updated(self) -> None:
         """Update the ROI calculations when exchange prices change."""
         _logger.debug("Updating investments table due to exchange update")
+        self.perform_recalculation()
+
+    def perform_recalculation(self):
         self.status_label.setText("Recalculating ROI values...")
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
@@ -404,7 +467,7 @@ class InvestmentsWindow(QWidget):
     def _perform_recalculation(self) -> None:
         """Perform the actual recalculation of ROI values."""
         try:
-            self.investments_table_model.populate_buildings()
+            self.investments_table_model.populate_investments()
             row_count = self.investments_table_model.rowCount()
             self.status_label.setText(
                 f"Showing {row_count} buildings with profitable recipes"

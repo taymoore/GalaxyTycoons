@@ -620,6 +620,45 @@ def format_consumables(preferred: tuple[int, ...], rejected: tuple[int, ...]) ->
     return " ".join(parts) if parts else "None"
 
 
+def find_best_recipe_for_technology(
+    specialization: Specialization, max_tech_level: int
+) -> None | Tuple[str, float, tuple[int, ...], tuple[int, ...]]:
+    try:
+        best_recipe = None
+        best_profit = float("-inf")
+        best_preferred = None
+        best_rejected = None
+
+        for recipe in GameDataManager.get().recipes:
+            if recipe.reqTech > max_tech_level:
+                continue
+            building = GameDataManager.get_building(recipe.producedIn)
+            if building.specialization != specialization:
+                continue
+            result = calculate_profit_and_consumables(recipe)
+            if result is None:
+                continue
+            profit, preferred, rejected = result
+            if profit > best_profit:
+                best_profit = profit
+                best_recipe = recipe
+                best_preferred = preferred
+                best_rejected = rejected
+        if best_recipe is None:
+            return None
+        return (
+            GameDataManager.get_item_name(best_recipe.output.id),
+            best_profit,
+            best_preferred,
+            best_rejected,
+        )
+    except Exception as e:
+        _logger.error(
+            f"Error finding best recipe for specialization {specialization} at tech level {max_tech_level}: {e}"
+        )
+        return None
+
+
 def find_best_recipe_for_building(
     building_id: int, tech_level: int = float("inf"), planet: Optional[Planet] = None
 ) -> None | Tuple[str, float, tuple[int, ...], tuple[int, ...]]:
@@ -694,17 +733,55 @@ def find_best_recipe_for_building(
         return None
 
 
-# def find_resource_extraction_value(planet: Planet, building: Optional[int]):
-#     resource_values = []
-#     for material in planet.mats:
-#         recipes = GameDataManager.get_recipe_by_output(material.id)
-#         for recipe in recipes:
-#             if building is not None and recipe.producedIn != building:
-#                 continue
-#             extraction_value = calculate_profit_and_consumables(
-#                 recipe, abundance=material.ab
-#             )
-#             if extraction_value is not None:
-#                 profit, _, _ = extraction_value
-#                 resource_values.append((material.id, profit))
-#     return resource_values
+def calculate_research_cost(
+    specialization: Specialization, tech_levels: dict[Specialization, int]
+) -> Tuple[int, int, int, int]:
+    """
+    Calculate the research cost for a given specialization and tech levels.
+    Args:
+        specialization: The specialization for which to calculate the research cost.
+        tech_levels: A dictionary mapping each specialization to its current tech level.
+    Returns:
+        A tuple containing the research costs for T1, T2, T3, and T4 technologies.
+        T1 item is Research Data (ID 64)
+        T2 item is Advanced Research Data (ID 65)
+        T3 item is Apex Research Data (ID 127)
+        T4 item is Quantum Research Data (ID 164)
+    """
+    # assert 1 <= tech_levels[specialization] <= 25
+    value_multiplier = ((tech_levels[specialization] / 4) + 1) ** 3
+    total_technologies = sum(tech_level for tech_level in tech_levels.values())
+    tech_penalty = (total_technologies + 1) ** 1.015 - total_technologies
+    tech_flat = total_technologies * 3_000
+    total_value = (value_multiplier * 8_000) * tech_penalty + tech_flat
+
+    tier_part = (tech_levels[specialization] + 1) / 5.0
+    tier_percentages = [0.0] * 4  # T1, T2, T3, T4
+    if tier_part <= 1.0:
+        # levels 1-5: Pure T1
+        tier_percentages[0] = 1.0
+    elif tier_part <= 2.0:
+        # levels 6-10: T1 to T2
+        progress = tier_part - 1.0  # 0.0 at level 6, 1.0 at level 10
+        tier_percentages[0] = 0.8 - (0.6 * progress)  # 0.8 at level 6, 0.2 at level 10
+        tier_percentages[1] = 0.2 + (0.6 * progress)  # 0.2 at level 6, 0.8 at level 10
+    elif tier_part <= 3.0:
+        # levels 11-15: T2 to T3
+        progress = tier_part - 2.0  # 0.0 at level 11, 1.0 at level 15
+        tier_percentages[1] = 0.8 - (0.6 * progress)  # 0.8 at level 11, 0.2 at level 15
+        tier_percentages[2] = 0.2 + (0.6 * progress)  # 0.2 at level 11, 0.8 at level 15
+    elif tier_part <= 4.0:
+        # levels 16-20: T3 to T4
+        progress = tier_part - 3.0  # 0.0 at level 16, 1.0 at level 20
+        tier_percentages[2] = 0.8 - (0.6 * progress)  # 0.8 at level 16, 0.2 at level 20
+        tier_percentages[3] = 0.2 + (0.6 * progress)  # 0.2 at level 16, 0.8 at level 20
+    else:
+        # levels 21+: Pure T4
+        tier_percentages[3] = 1.0
+
+    tier_amounts = [None] * 4  # T1, T2, T3, T4
+    for tier_index, tier_divisor in zip(range(4), (1_100, 3_000, 6_000, 10_000)):
+        tier_amounts[tier_index] = math.ceil(
+            (total_value * tier_percentages[tier_index]) / tier_divisor
+        )
+    return tier_amounts

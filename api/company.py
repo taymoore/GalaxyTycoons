@@ -1,7 +1,7 @@
 from functools import cache
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Optional, Type, TypeVar
 
 import requests
@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from PySide6.QtCore import QObject, QSemaphore, Signal, Slot
 
 from api.models.company import Company, Base
+
+FETCH_COMPANY_TIMEOUT_SECONDS = 60 * 5  # 5 minutes
 
 # Load environment variables from .env file
 load_dotenv()
@@ -37,17 +39,28 @@ class CompanyDataManager(QObject):
         self._stop_requested = False
         self._wake_semaphore = QSemaphore(0)
         self.base_dict: Dict[int, Base] = {}
+        self.fetch_company_timestamp: Optional[datetime] = None
 
     @Slot()
     def fetch_company(self) -> Optional[Company]:
         """Fetch company data on demand."""
+        if (
+            self.fetch_company_timestamp
+            and datetime.now() - self.fetch_company_timestamp
+            < timedelta(seconds=FETCH_COMPANY_TIMEOUT_SECONDS)
+        ):
+            _logger.info(
+                f"Not fetching company data; last fetch was at {self.fetch_company_timestamp}"
+            )
+            return None
         _logger.info("Starting company data fetch...")
         try:
             company = self._fetch_with_retry(
                 "https://api.g2.galactictycoons.com/public/company", Company
             )
             if company:
-                _logger.info(f"Fetched company data at {datetime.now()}")
+                self.fetch_company_timestamp = datetime.now()
+                _logger.info(f"Fetched company data at {self.fetch_company_timestamp}")
                 self.company_loaded.emit(company)
                 for base in company.bases:
                     base = self.fetch_base(base.id)
