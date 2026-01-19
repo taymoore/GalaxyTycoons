@@ -214,6 +214,8 @@ if __name__ == "__main__":
         format="%(asctime)s - %(levelname)s - %(message)s", level=logging.DEBUG
     )
 
+    # Initialize Exchange as a QObject
+    exchange_instance = Exchange()
     Exchange.load_cache()
     Exchange.update_listings()
 

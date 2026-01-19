@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import os
 from dotenv import load_dotenv
+from PySide6.QtCore import Signal, QObject
 
 from api.models.exchange import Listing, Listings
 
@@ -16,9 +17,13 @@ load_dotenv()
 _logger = logging.getLogger(__name__)
 
 
-class Exchange:
+class Exchange(QObject):
     """Manages exchange listings caching, fetching, and retrieval."""
+    
+    # Signal emitted when exchange data is updated
+    exchange_updated_signal = Signal()
 
+    _instance = None
     _CACHE_FILENAME = "exchange.pkl"
     _CACHE2_FILENAME = "exchange2.pkl"
     _CACHE_DIR = ".data"
@@ -27,6 +32,16 @@ class Exchange:
     listings: Dict[int, Listing] = {}
     updated_time: Optional[datetime] = None
     session = Session()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(Exchange, cls).__new__(cls)
+        return cls._instance
+        
+    def __init__(self):
+        if not hasattr(self, '_initialized'):
+            super().__init__()
+            self._initialized = True
 
     @staticmethod
     def load_cache() -> None:
@@ -142,6 +157,9 @@ class Exchange:
         _logger.info(
             f"Exchange listings updated. Total listings: {len(Exchange.listings)}"
         )
+        
+        # Emit signal that exchange data has been updated
+        Exchange._instance.exchange_updated_signal.emit()
 
     @staticmethod
     def close() -> None:
