@@ -6,6 +6,7 @@ import pickle
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field
+from api.models.gameData import RecipeType
 from PySide6.QtCore import (
     Slot,
     Signal,
@@ -171,7 +172,7 @@ class InvestmentsWindow(QWidget):
                         if cost <= 0:
                             continue  # Skip buildings with invalid costs
 
-                        # Find best recipe for this building
+                        # Find best recipe for this building (only PRODUCTION type)
                         best_recipe, profit_per_hour = (
                             self._find_best_recipe_for_building(building.id)
                         )
@@ -179,6 +180,15 @@ class InvestmentsWindow(QWidget):
                         # Skip buildings with no profitable recipes
                         if not best_recipe or profit_per_hour <= 0:
                             continue
+                            
+                        # Skip recipes that exceed tech level filter
+                        if hasattr(self, 'settings') and self.settings and hasattr(best_recipe, 'reqTech'):
+                            from settings import Settings
+                            settings = Settings()
+                            specialization = building.specialization
+                            max_tech_level = settings.tech_level_filters.get(specialization, float('inf'))
+                            if best_recipe.reqTech > max_tech_level:
+                                continue
 
                         # Calculate ROI in days (cost / profit per hour / 24)
                         roi_days = (
@@ -252,6 +262,7 @@ class InvestmentsWindow(QWidget):
                     game_data = GameDataManager.get()
                     for recipe in game_data.recipes:
                         if (recipe.producedIn == building_id and 
+                            recipe.type == RecipeType.PRODUCTION and
                             GameDataManager.get_item_name(recipe.output.id) == recipe_name):
                             return recipe, profit
                 
@@ -260,7 +271,7 @@ class InvestmentsWindow(QWidget):
                 best_recipe = None
                 
                 for recipe in GameDataManager.get().recipes:
-                    if recipe.producedIn != building_id:
+                    if recipe.producedIn != building_id or recipe.type != RecipeType.PRODUCTION:
                         continue
                         
                     result = calculate_profit_and_consumables(recipe)
@@ -331,8 +342,11 @@ class InvestmentsWindow(QWidget):
             # Fall back to default comparison
             return super().lessThan(source_left, source_right)
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, settings=None) -> None:
         super().__init__(parent)
+        
+        # Store settings reference
+        self.settings = settings
 
         # Main layout
         self.main_layout = QVBoxLayout()

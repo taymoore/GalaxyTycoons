@@ -60,7 +60,7 @@ class MainWindow(QMainWindow):
         # Initialize the sub-windows
         self.recipe_tab = RecipeWindow(self, self.recipe_worker, self.settings)
         self.planets_tab = PlanetsWindow(self)
-        self.investments_tab = InvestmentsWindow(self)
+        self.investments_tab = InvestmentsWindow(self, self.settings)
         self.configuration_tab = ConfigurationWindow(
             self, self.settings, self.recipe_worker, self.company_data_manager
         )

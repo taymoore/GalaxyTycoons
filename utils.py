@@ -648,6 +648,7 @@ def find_best_recipe_for_building(
                 continue
             if recipe.reqTech > tech_level:
                 continue
+            # Only consider PRODUCTION type recipes
             if recipe.type == RecipeType.PRODUCTION:
                 result = calculate_profit_and_consumables(recipe)
 
