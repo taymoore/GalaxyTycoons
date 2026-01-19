@@ -124,7 +124,7 @@ class ConfigurationWindow(QWidget):
                 consumables_item.setEditable(False)
 
                 # Store base ID for later lookup
-                name_item.setData(base.id, Qt.ItemDataRole.UserRole)
+                name_item.setData(base, Qt.ItemDataRole.UserRole)
 
                 self.appendRow(
                     [name_item, level_item, recipe_item, profit_item, consumables_item]
@@ -139,7 +139,7 @@ class ConfigurationWindow(QWidget):
             parent_item = None
             for row in range(self.rowCount()):
                 item = self.item(row, 0)
-                if item and item.data(Qt.ItemDataRole.UserRole) == base.id:
+                if item and item.data(Qt.ItemDataRole.UserRole).id == base.id:
                     parent_item = item
                     break
 
@@ -266,6 +266,7 @@ class ConfigurationWindow(QWidget):
             """Recalculate best recipes for all buildings in the tree."""
             for parent_row in range(self.rowCount()):
                 parent_item = self.item(parent_row, 0)
+                base = parent_item.data(Qt.ItemDataRole.UserRole)
                 if parent_item:
                     for child_row in range(parent_item.rowCount()):
                         child_name = parent_item.child(child_row, 0)
@@ -281,9 +282,13 @@ class ConfigurationWindow(QWidget):
                             )
 
                             if building_type and building_level:
-                                # We don't have planet information here, so we can't update recipes
-                                # that require planet data (like extraction recipes)
-                                _logger.debug(f"Skipping recipe recalculation for building {building_type} - no planet data")
+                                self._update_best_recipe_for_building(
+                                    building_type,
+                                    child_recipe,
+                                    child_profit,
+                                    child_consumables,
+                                    base.planet_id,
+                                )
 
     class ConfigurationTreeView(QTreeView):
         def __init__(self, parent):

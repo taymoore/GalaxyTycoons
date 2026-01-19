@@ -1,7 +1,8 @@
+from functools import cache
 import logging
 import os
 from datetime import datetime
-from typing import Optional, Type, TypeVar
+from typing import Dict, Optional, Type, TypeVar
 
 import requests
 from dotenv import load_dotenv
@@ -35,6 +36,7 @@ class CompanyDataManager(QObject):
         self.base_delay_seconds = base_delay_seconds
         self._stop_requested = False
         self._wake_semaphore = QSemaphore(0)
+        self.base_dict: Dict[int, Base] = {}
 
     @Slot()
     def fetch_company(self) -> Optional[Company]:
@@ -63,6 +65,7 @@ class CompanyDataManager(QObject):
                 f"https://api.g2.galactictycoons.com/public/company/base/{id}", Base
             )
             if base:
+                self.base_dict[base.id] = base
                 self.base_loaded.emit(base)
         except Exception as exc:  # noqa: BLE001
             _logger.error("Error fetching base data: %s", exc)
