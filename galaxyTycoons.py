@@ -28,6 +28,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Game Data Tool")
         self.resize(QSize(1400, 800))
+        
+        # Create status bar
+        self.statusBar().showMessage("Ready")
 
         # Load settings
         self.settings = Settings()
@@ -144,11 +147,26 @@ class MainWindow(QMainWindow):
         import utils
         utils.USE_ALL_CONSUMABLES = checked
         
-        # Trigger recalculation of recipes
-        if hasattr(self, 'recipe_tab'):
-            self.recipe_tab.handle_exchange_updated()
-        if hasattr(self, 'configuration_tab'):
-            self.configuration_tab.handle_exchange_updated()
+        # Disable the action during recalculation to prevent multiple clicks
+        self.all_consumables_action.setEnabled(False)
+        self.statusBar().showMessage(f"Recalculating with {'all' if checked else 'optimal'} consumables...")
+        
+        # Use a timer to allow the UI to update before starting the heavy calculation
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(100, self._perform_consumables_recalculation)
+    
+    def _perform_consumables_recalculation(self) -> None:
+        """Perform the actual recalculation after toggling consumables mode."""
+        try:
+            # Trigger recalculation of recipes
+            if hasattr(self, 'recipe_tab'):
+                self.recipe_tab.handle_exchange_updated()
+            if hasattr(self, 'configuration_tab'):
+                self.configuration_tab.handle_exchange_updated()
+        finally:
+            # Re-enable the action and clear status message
+            self.all_consumables_action.setEnabled(True)
+            self.statusBar().showMessage("Recalculation complete", 3000)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """

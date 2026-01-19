@@ -1369,58 +1369,86 @@ class RecipeWindow(QWidget):
         Args:
             listings (Dict[int, Listing]): Updated listings data.
         """
-        for row, recipe in enumerate(self.recipe_table_model.recipes):
-            result = calculate_profit_and_consumables(recipe)
-            if result is None:
-                profit_per_hour = float("-inf")
-                consumable_preferred_combination = ()
-                consumable_rejected_combination = ()
-            else:
-                (
-                    profit_per_hour,
-                    consumable_preferred_combination,
-                    consumable_rejected_combination,
-                ) = result
+        # Process recipes in batches to keep UI responsive
+        batch_size = 20
+        total_recipes = len(self.recipe_table_model.recipes)
+        
+        # Use a timer to process recipes in batches
+        from PySide6.QtCore import QTimer
+        
+        def process_batch(start_idx):
+            end_idx = min(start_idx + batch_size, total_recipes)
+            
+            # Process a batch of recipes
+            for row in range(start_idx, end_idx):
+                recipe = self.recipe_table_model.recipes[row]
+                result = calculate_profit_and_consumables(recipe)
+                if result is None:
+                    profit_per_hour = float("-inf")
+                    consumable_preferred_combination = ()
+                    consumable_rejected_combination = ()
+                else:
+                    (
+                        profit_per_hour,
+                        consumable_preferred_combination,
+                        consumable_rejected_combination,
+                    ) = result
 
-            # Get updated quantity sold daily and convert to per-hour
-            quantity_sold_daily = 0.0
-            try:
-                listing = Exchange.get_listing(recipe.output.id)
-                if listing:
-                    quantity_sold_daily = (
-                        listing.average_quantity_sold_daily * (recipe.timeMinutes / 60)
-                        if recipe.timeMinutes > 0
-                        else 0.0
+                # Get updated quantity sold daily and convert to per-hour
+                quantity_sold_daily = 0.0
+                try:
+                    listing = Exchange.get_listing(recipe.output.id)
+                    if listing:
+                        quantity_sold_daily = (
+                            listing.average_quantity_sold_daily * (recipe.timeMinutes / 60)
+                            if recipe.timeMinutes > 0
+                            else 0.0
+                        )
+                except Exception as e:
+                    _logger.warning(
+                        f"Could not get quantity sold for recipe {recipe.id}: {e}"
                     )
-            except Exception as e:
-                _logger.warning(
-                    f"Could not get quantity sold for recipe {recipe.id}: {e}"
+
+                self.recipe_table_model.setData(
+                    self.recipe_table_model.index(row, 1),
+                    profit_per_hour,
+                    Qt.ItemDataRole.EditRole,
+                )
+                self.recipe_table_model.setData(
+                    self.recipe_table_model.index(row, 2),
+                    quantity_sold_daily,
+                    Qt.ItemDataRole.EditRole,
                 )
 
-            self.recipe_table_model.setData(
-                self.recipe_table_model.index(row, 1),
-                profit_per_hour,
-                Qt.ItemDataRole.EditRole,
-            )
-            self.recipe_table_model.setData(
-                self.recipe_table_model.index(row, 2),
-                quantity_sold_daily,
-                Qt.ItemDataRole.EditRole,
-            )
+                # Update value based on current weight
+                weight = self.toolbox.get_value_weight()
+                # Apply logarithmic transformation to quantity
+                quantity_sold_log = (
+                    math.log1p(quantity_sold_daily) * QUANTITY_SOLD_SCALING_FACTOR
+                )
+                value = (profit_per_hour * (1 - weight)) + (quantity_sold_log * weight)
+                self.recipe_table_model.update_value(row, value)
 
-            # Update value based on current weight
-            weight = self.toolbox.get_value_weight()
-            # Apply logarithmic transformation to quantity
-            # Scale by QUANTITY_SOLD_SCALING_FACTOR to bring it into comparable range with profit/hr
-            quantity_sold_log = (
-                math.log1p(quantity_sold_daily) * QUANTITY_SOLD_SCALING_FACTOR
-            )
-            value = (profit_per_hour * (1 - weight)) + (quantity_sold_log * weight)
-            self.recipe_table_model.update_value(row, value)
-
-            self.recipe_table_model.update_consumables(
-                row, consumable_preferred_combination, consumable_rejected_combination
-            )
+                self.recipe_table_model.update_consumables(
+                    row, consumable_preferred_combination, consumable_rejected_combination
+                )
+            
+            # Process next batch or finish
+            if end_idx < total_recipes:
+                # Update status if parent window has a status bar
+                parent_window = self.window()
+                if hasattr(parent_window, 'statusBar'):
+                    parent_window.statusBar().showMessage(f"Recalculating recipes: {end_idx}/{total_recipes}...")
+                
+                # Schedule next batch
+                QTimer.singleShot(0, lambda: process_batch(end_idx))
+            else:
+                # Finished all batches
+                if hasattr(parent_window, 'statusBar'):
+                    parent_window.statusBar().showMessage("Recipe recalculation complete", 3000)
+        
+        # Start processing the first batch
+        process_batch(0)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         _logger.debug("Saving settings.")

@@ -264,6 +264,11 @@ class ConfigurationWindow(QWidget):
 
         def recalculate_all_recipes(self):
             """Recalculate best recipes for all buildings in the tree."""
+            from PySide6.QtCore import QTimer
+            
+            # Collect all items that need recalculation
+            items_to_recalculate = []
+            
             for parent_row in range(self.rowCount()):
                 parent_item = self.item(parent_row, 0)
                 base = parent_item.data(Qt.ItemDataRole.UserRole)
@@ -282,13 +287,48 @@ class ConfigurationWindow(QWidget):
                             )
 
                             if building_type and building_level:
-                                self._update_best_recipe_for_building(
+                                items_to_recalculate.append((
                                     building_type,
                                     child_recipe,
                                     child_profit,
                                     child_consumables,
                                     base.planet_id,
-                                )
+                                ))
+            
+            # Process items in batches
+            batch_size = 5
+            total_items = len(items_to_recalculate)
+            
+            def process_batch(start_idx):
+                end_idx = min(start_idx + batch_size, total_items)
+                
+                # Process a batch of items
+                for i in range(start_idx, end_idx):
+                    building_type, child_recipe, child_profit, child_consumables, planet_id = items_to_recalculate[i]
+                    self._update_best_recipe_for_building(
+                        building_type,
+                        child_recipe,
+                        child_profit,
+                        child_consumables,
+                        planet_id,
+                    )
+                
+                # Process next batch or finish
+                if end_idx < total_items:
+                    # Update status if parent window has a status bar
+                    parent_window = self.parent()
+                    while parent_window and not hasattr(parent_window, 'statusBar'):
+                        parent_window = parent_window.parent()
+                    
+                    if parent_window and hasattr(parent_window, 'statusBar'):
+                        parent_window.statusBar().showMessage(f"Recalculating buildings: {end_idx}/{total_items}...")
+                    
+                    # Schedule next batch
+                    QTimer.singleShot(0, lambda: process_batch(end_idx))
+            
+            # Start processing the first batch
+            if items_to_recalculate:
+                process_batch(0)
 
     class ConfigurationTreeView(QTreeView):
         def __init__(self, parent):
