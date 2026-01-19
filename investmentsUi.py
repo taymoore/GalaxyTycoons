@@ -71,10 +71,10 @@ class InvestmentsWindow(QWidget):
             self.roi_min = 0.0
             self.roi_max = 1000.0  # Default max ROI in days
 
-        def rowCount(self, /, parent: QModelIndex | QPersistentModelIndex = ...) -> int:
+        def rowCount(self, /, parent=None) -> int:
             return len(self.table_data)
 
-        def columnCount(self, /, parent=QModelIndex | QPersistentModelIndex = ...) -> int:
+        def columnCount(self, /, parent=None) -> int:
             return len(self.header_data)
 
         def headerData(
@@ -90,9 +90,9 @@ class InvestmentsWindow(QWidget):
         def data(
             self,
             /,
-            index: QModelIndex | QPersistentModelIndex,
+            index,
             role: Qt.ItemDataRole = Qt.ItemDataRole.DisplayRole,
-        ) -> object | None:
+        ) -> object:
             row = index.row()
             column = index.column()
             
@@ -304,7 +304,7 @@ class InvestmentsWindow(QWidget):
             self.resizeColumnsToContents()
 
     class InvestmentsTableProxyModel(QSortFilterProxyModel):
-        def __init__(self, parent: QObject | None):
+        def __init__(self, parent=None):
             super().__init__(parent)
             self.setDynamicSortFilter(True)
             
@@ -331,7 +331,7 @@ class InvestmentsWindow(QWidget):
             # Fall back to default comparison
             return super().lessThan(source_left, source_right)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
 
         # Main layout
