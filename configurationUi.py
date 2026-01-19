@@ -195,7 +195,7 @@ class ConfigurationWindow(QWidget):
                         child_recipe,
                         child_profit,
                         child_consumables,
-                        GameDataManager.get_planet(base.planet_id),
+                        base.planet_id,
                     )
 
         def _update_best_recipe_for_building(
@@ -204,7 +204,7 @@ class ConfigurationWindow(QWidget):
             recipe_item: QStandardItem,
             profit_item: QStandardItem,
             consumables_item: QStandardItem,
-            planet: Planet,
+            planet_id: int,
         ):
             """Calculate and update the best recipe for a building."""
             try:
@@ -221,6 +221,7 @@ class ConfigurationWindow(QWidget):
                 )
 
                 # Calculate best recipe
+                planet = GameDataManager.get_planet(planet_id)
                 result = find_best_recipe_for_building(building.id, tech_level, planet)
 
                 if result is None:
@@ -280,13 +281,9 @@ class ConfigurationWindow(QWidget):
                             )
 
                             if building_type and building_level:
-                                self._update_best_recipe_for_building(
-                                    building_type,
-                                    building_level,
-                                    child_recipe,
-                                    child_profit,
-                                    child_consumables,
-                                )
+                                # We don't have planet information here, so we can't update recipes
+                                # that require planet data (like extraction recipes)
+                                _logger.debug(f"Skipping recipe recalculation for building {building_type} - no planet data")
 
     class ConfigurationTreeView(QTreeView):
         def __init__(self, parent):
