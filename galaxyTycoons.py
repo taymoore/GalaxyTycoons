@@ -98,6 +98,16 @@ class MainWindow(QMainWindow):
         copy_listings_action = QAction("Copy Listings to Clipboard", self)
         copy_listings_action.triggered.connect(self._copy_listings_to_clipboard)
         tools_menu.addAction(copy_listings_action)
+        
+        # Add separator
+        tools_menu.addSeparator()
+        
+        # Add "All Consumables" checkbox
+        self.all_consumables_action = QAction("All Consumables", self)
+        self.all_consumables_action.setCheckable(True)
+        self.all_consumables_action.setChecked(False)
+        self.all_consumables_action.triggered.connect(self._toggle_all_consumables)
+        tools_menu.addAction(self.all_consumables_action)
 
     def _copy_listings_to_clipboard(self) -> None:
         """Copy all listings to clipboard in tab-separated format for Excel."""
@@ -126,6 +136,19 @@ class MainWindow(QMainWindow):
         clipboard.setText(table_text)
 
         _logger.info(f"Copied {len(sorted_listings)} listings to clipboard.")
+        
+    def _toggle_all_consumables(self, checked: bool) -> None:
+        """Toggle the use of all consumables in profit calculations."""
+        _logger.info(f"All consumables mode {'enabled' if checked else 'disabled'}")
+        # Update the global flag in utils.py
+        import utils
+        utils.USE_ALL_CONSUMABLES = checked
+        
+        # Trigger recalculation of recipes
+        if hasattr(self, 'recipe_tab'):
+            self.recipe_tab.handle_exchange_updated()
+        if hasattr(self, 'configuration_tab'):
+            self.configuration_tab.handle_exchange_updated()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """

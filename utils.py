@@ -14,6 +14,9 @@ from api.gameData import GameDataManager
 from api.exchange import Exchange
 from api.models.gameData import Planet, RecipeType, Specialization, WorkerType
 
+# Global flag to control consumable calculation behavior
+USE_ALL_CONSUMABLES = False
+
 _logger = logging.getLogger(__name__)
 
 
@@ -391,88 +394,134 @@ def calculate_profit_and_consumables(
             _logger.debug(
                 f"No workers needed for building {building.name} ({building.id})."
             )
-        # Try all combinations of consumables to find lowest cost
-        consumable_preferred_combination = None
-        for combination_size in range(len(consumable_id_set or []) + 1):
-            for consumable_list in itertools.combinations(
-                consumable_id_set or [], combination_size
-            ):
-                worker_cost_per_hour = 0.0
-                worker_count_satisfaction_list: List[tuple[float, float]] = (
-                    []
-                )  # worker_count, worker_satisfaction
-                for worker_type, worker_count in enumerate(
-                    building.workersNeeded or [], start=1
-                ):
-                    if worker_count == 0:
+            
+        # If USE_ALL_CONSUMABLES is True, use all consumables instead of finding optimal combination
+        if USE_ALL_CONSUMABLES and consumable_id_set:
+            _logger.debug(f"Using all consumables for recipe {recipe.id}")
+            consumable_preferred_combination = tuple(consumable_id_set)
+            consumable_rejected_combination = ()
+            
+            # Calculate worker cost with all consumables
+            worker_cost_per_hour = 0.0
+            worker_count_satisfaction_list = []
+            
+            for worker_type, worker_count in enumerate(building.workersNeeded or [], start=1):
+                if worker_count == 0:
+                    continue
+                worker = GameDataManager.get_worker(worker_type)
+                worker_type_satisfaction = 1.0  # All consumables = 100% satisfaction
+                
+                for consumable in worker.consumables:
+                    consumable_listing = Exchange.get_listing(consumable.matId)
+                    if consumable_listing.current_price < 1:
+                        _logger.warning(f"Invalid price for consumable {consumable.matId}")
                         continue
-                    consumable_optional_missed_count = 0
-                    consumable_essential_missed_count = 0
-                    combination_valid = True
-                    worker = GameDataManager.get_worker(worker_type)
-                    for consumable in worker.consumables:
-                        # If consumable is in this combination, calculate its cost
-                        if consumable.matId in consumable_list:
-                            consumable_listing = Exchange.get_listing(consumable.matId)
-                            if consumable_listing.current_price < 1:
-                                combination_valid = False
-                                break
-                            worker_cost_per_hour += (
-                                consumable_listing.current_price  # in cents
-                                * consumable.amount  # daily consumption per 1000 workers
-                                * worker_count  # number of workers
-                                / 24  # hours per day
-                                / 1000  # per 1000 workers
-                                / 100  # convert cents to dollars
-                            )
-                        # If consumable is not in this combination, apply satisfaction penalty
-                        else:
-                            if consumable.essential:
-                                consumable_essential_missed_count += 1
+                    worker_cost_per_hour += (
+                        consumable_listing.current_price  # in cents
+                        * consumable.amount  # daily consumption per 1000 workers
+                        * worker_count  # number of workers
+                        / 24  # hours per day
+                        / 1000  # per 1000 workers
+                        / 100  # convert cents to dollars
+                    )
+                
+                worker_count_satisfaction_list.append((worker_count, worker_type_satisfaction))
+            
+            total_worker_count = sum(worker_count for worker_count, _ in worker_count_satisfaction_list)
+            total_worker_satisfaction = (
+                sum(
+                    worker_count * worker_satisfaction / total_worker_count
+                    for worker_count, worker_satisfaction in worker_count_satisfaction_list
+                )
+                if total_worker_count > 0
+                else 0.1
+            )
+            
+            optimal_profit_per_hour = base_profit_per_hour * total_worker_satisfaction - worker_cost_per_hour
+        else:
+            # Try all combinations of consumables to find lowest cost
+            consumable_preferred_combination = None
+            for combination_size in range(len(consumable_id_set or []) + 1):
+                for consumable_list in itertools.combinations(
+                    consumable_id_set or [], combination_size
+                ):
+                    worker_cost_per_hour = 0.0
+                    worker_count_satisfaction_list: List[tuple[float, float]] = (
+                        []
+                    )  # worker_count, worker_satisfaction
+                    for worker_type, worker_count in enumerate(
+                        building.workersNeeded or [], start=1
+                    ):
+                        if worker_count == 0:
+                            continue
+                        consumable_optional_missed_count = 0
+                        consumable_essential_missed_count = 0
+                        combination_valid = True
+                        worker = GameDataManager.get_worker(worker_type)
+                        for consumable in worker.consumables:
+                            # If consumable is in this combination, calculate its cost
+                            if consumable.matId in consumable_list:
+                                consumable_listing = Exchange.get_listing(consumable.matId)
+                                if consumable_listing.current_price < 1:
+                                    combination_valid = False
+                                    break
+                                worker_cost_per_hour += (
+                                    consumable_listing.current_price  # in cents
+                                    * consumable.amount  # daily consumption per 1000 workers
+                                    * worker_count  # number of workers
+                                    / 24  # hours per day
+                                    / 1000  # per 1000 workers
+                                    / 100  # convert cents to dollars
+                                )
+                            # If consumable is not in this combination, apply satisfaction penalty
                             else:
-                                consumable_optional_missed_count += 1
-                    if not combination_valid:
-                        break
-                    worker_type_satisfaction = 1.0
-                    worker_type_satisfaction -= 0.1 * consumable_optional_missed_count
-                    worker_type_satisfaction *= 0.6**consumable_essential_missed_count
-                    worker_type_satisfaction = max(worker_type_satisfaction, 0.1)
-                    worker_count_satisfaction_list.append(
-                        (worker_count, worker_type_satisfaction)
+                                if consumable.essential:
+                                    consumable_essential_missed_count += 1
+                                else:
+                                    consumable_optional_missed_count += 1
+                        if not combination_valid:
+                            break
+                        worker_type_satisfaction = 1.0
+                        worker_type_satisfaction -= 0.1 * consumable_optional_missed_count
+                        worker_type_satisfaction *= 0.6**consumable_essential_missed_count
+                        worker_type_satisfaction = max(worker_type_satisfaction, 0.1)
+                        worker_count_satisfaction_list.append(
+                            (worker_count, worker_type_satisfaction)
+                        )
+                    total_worker_count = sum(
+                        worker_count for worker_count, _ in worker_count_satisfaction_list
                     )
-                total_worker_count = sum(
-                    worker_count for worker_count, _ in worker_count_satisfaction_list
-                )
-                total_worker_satisfaction = (
-                    sum(
-                        worker_count * worker_satisfaction / total_worker_count
-                        for worker_count, worker_satisfaction in worker_count_satisfaction_list
+                    total_worker_satisfaction = (
+                        sum(
+                            worker_count * worker_satisfaction / total_worker_count
+                            for worker_count, worker_satisfaction in worker_count_satisfaction_list
+                        )
+                        if total_worker_count > 0
+                        else 0.1
                     )
-                    if total_worker_count > 0
-                    else 0.1
+                    assert 0.0 < total_worker_satisfaction <= 1.0
+                    configuration_profit_per_hour = (
+                        base_profit_per_hour * total_worker_satisfaction
+                        - worker_cost_per_hour
+                    )
+                    if configuration_profit_per_hour > optimal_profit_per_hour:
+                        optimal_profit_per_hour = configuration_profit_per_hour
+                        consumable_preferred_combination = consumable_list
+            
+            if optimal_profit_per_hour == float("-inf"):
+                _logger.debug(
+                    f"Could not calculate profit for recipe {GameDataManager.get_item_name(recipe.output.id)} ({recipe.id}). Base profit/hr: {base_profit_per_hour:,.2f}."
                 )
-                assert 0.0 < total_worker_satisfaction <= 1.0
-                configuration_profit_per_hour = (
-                    base_profit_per_hour * total_worker_satisfaction
-                    - worker_cost_per_hour
-                )
-                if configuration_profit_per_hour > optimal_profit_per_hour:
-                    optimal_profit_per_hour = configuration_profit_per_hour
-                    consumable_preferred_combination = consumable_list
-        if optimal_profit_per_hour == float("-inf"):
-            _logger.debug(
-                f"Could not calculate profit for recipe {GameDataManager.get_item_name(recipe.output.id)} ({recipe.id}). Base profit/hr: {base_profit_per_hour:,.2f}."
-            )
-            return None
+                return None
 
-        if consumable_preferred_combination is None:
-            _logger.error(
-                f"No valid consumable combination found for recipe {GameDataManager.get_item_name(recipe.output.id)} ({recipe.id}). This should not happen."
-            )
-            return None
-        consumable_rejected_combination = consumable_id_set.difference(
-            consumable_preferred_combination
-        )
+            if consumable_preferred_combination is None:
+                _logger.error(
+                    f"No valid consumable combination found for recipe {GameDataManager.get_item_name(recipe.output.id)} ({recipe.id}). This should not happen."
+                )
+                return None
+            consumable_rejected_combination = tuple(consumable_id_set.difference(
+                consumable_preferred_combination
+            ))
 
         # Find building depreciation cost per hour
         building_depreciation_per_hour = 0.0
