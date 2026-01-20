@@ -42,6 +42,7 @@ import pyqtgraph as pg
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
+import utils
 from utils import align_add
 from api.gameData import GameDataManager
 from api.models.gameData import Recipe, Specialization, Building, WorkerType
@@ -124,9 +125,12 @@ class PlanetsWindow(QWidget):  # Changed from QMainWindow
                 for planet in system.planets or []:
                     planet_value = 0.0
                     for mat in planet.mats:
-                        planet_value += (
-                            Exchange.get_listing(mat.id).current_price * mat.ab / 1000
+                        mat_price = (
+                            Exchange.get_listing(mat.id).average_price
+                            if utils.use_average_price
+                            else Exchange.get_listing(mat.id).current_price
                         )
+                        planet_value += mat_price * mat.ab / 1000
                     if planet_value > self.max_planet_value:
                         self.max_planet_value = planet_value
                     planet_distance = float(

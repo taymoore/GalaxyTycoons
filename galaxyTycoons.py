@@ -1,13 +1,11 @@
 import logging
-from pathlib import Path
-import pickle
-from tkinter import SE
 from PySide6.QtCore import QSize, QThread, Signal
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QMainWindow, QTabWidget, QMenuBar
+from PySide6.QtWidgets import QMainWindow, QTabWidget
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication
 
+import utils
 from api.gameData import GameDataManager
 from api.exchange import Exchange
 from api.company import CompanyDataManager
@@ -123,6 +121,13 @@ class MainWindow(QMainWindow):
         self.all_consumables_action.triggered.connect(self._toggle_all_consumables)
         tools_menu.addAction(self.all_consumables_action)
 
+        # Add "Average price" checkbox
+        self.average_price_action = QAction("Use Average Price", self)
+        self.average_price_action.setCheckable(True)
+        self.average_price_action.setChecked(False)
+        self.average_price_action.triggered.connect(self._toggle_average_price)
+        tools_menu.addAction(self.average_price_action)
+
     def _copy_listings_to_clipboard(self) -> None:
         """Copy all listings to clipboard in tab-separated format for Excel."""
         if not Exchange.listings:
@@ -138,8 +143,13 @@ class MainWindow(QMainWindow):
 
         # Add each listing
         for listing in sorted_listings:
+            listing_price = (
+                listing.average_price
+                if utils.use_average_price
+                else listing.current_price
+            )
             lines.append(
-                f"{listing.name}\t{listing.current_price/100 if listing.current_price > 0 else 'N/A'}"
+                f"{listing.name}\t{listing_price / 100 if listing_price > 0 else 'N/A'}"
             )
 
         # Join with newlines
@@ -154,15 +164,28 @@ class MainWindow(QMainWindow):
     def _toggle_all_consumables(self, checked: bool) -> None:
         """Toggle the use of all consumables in profit calculations."""
         _logger.info(f"All consumables mode {'enabled' if checked else 'disabled'}")
+
         # Update the global flag in utils.py
-        import utils
+        utils.use_all_consumables = checked
 
-        utils.USE_ALL_CONSUMABLES = checked
-
-        # Disable the action during recalculation to prevent multiple clicks
-        self.all_consumables_action.setEnabled(False)
         self.statusBar().showMessage(
             f"Recalculating with {'all' if checked else 'optimal'} consumables..."
+        )
+
+        # Use a timer to allow the UI to update before starting the heavy calculation
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(100, self._perform_consumables_recalculation)
+
+    def _toggle_average_price(self, checked: bool) -> None:
+        """Toggle the use of average price in profit calculations."""
+        _logger.info(f"Average price mode {'enabled' if checked else 'disabled'}")
+
+        # Update the global flag in utils.py
+        utils.use_average_price = checked
+
+        self.statusBar().showMessage(
+            f"Recalculating with {'average' if checked else 'current'} prices..."
         )
 
         # Use a timer to allow the UI to update before starting the heavy calculation
@@ -174,13 +197,10 @@ class MainWindow(QMainWindow):
         """Perform the actual recalculation after toggling consumables mode."""
         try:
             # Trigger recalculation of recipes
-            if hasattr(self, "recipe_tab"):
-                self.recipe_tab.handle_exchange_updated()
-            if hasattr(self, "configuration_tab"):
-                self.configuration_tab.handle_exchange_updated()
+            self.recipe_tab.handle_exchange_updated()
+            self.configuration_tab.handle_exchange_updated()
         finally:
             # Re-enable the action and clear status message
-            self.all_consumables_action.setEnabled(True)
             self.statusBar().showMessage("Recalculation complete", 3000)
 
     def closeEvent(self, event: QCloseEvent) -> None:

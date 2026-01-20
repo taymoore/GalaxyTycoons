@@ -55,6 +55,7 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
 from settings import Settings
+import utils
 from utils import (
     align_add,
     calculate_profit_and_consumables,
@@ -663,9 +664,7 @@ class RecipeWindow(QWidget):
             row.append(
                 f"{GameDataManager.get_building(recipe.producedIn).specialization.name} {recipe.reqTech}"
             )
-            row.append(
-                f"{GameDataManager.get_building(recipe.producedIn).name}"
-            )
+            row.append(f"{GameDataManager.get_building(recipe.producedIn).name}")
             row.append(format_consumables(consumable_preferred, consumable_rejected))
 
             self.recipes.append(recipe)
@@ -1126,7 +1125,7 @@ class RecipeWindow(QWidget):
         # Apply specialization color delegate to tech requirement column
         self.specialization_delegate = SpecializationColorDelegate(self)
         self.recipe_table_view.setItemDelegateForColumn(4, self.specialization_delegate)
-        
+
         # Apply building color delegate to building column
         self.building_delegate = BuildingColorDelegate(self)
         self.recipe_table_view.setItemDelegateForColumn(5, self.building_delegate)
@@ -1372,13 +1371,13 @@ class RecipeWindow(QWidget):
         # Process recipes in batches to keep UI responsive
         batch_size = 20
         total_recipes = len(self.recipe_table_model.recipes)
-        
+
         # Use a timer to process recipes in batches
         from PySide6.QtCore import QTimer
-        
+
         def process_batch(start_idx):
             end_idx = min(start_idx + batch_size, total_recipes)
-            
+
             # Process a batch of recipes
             for row in range(start_idx, end_idx):
                 recipe = self.recipe_table_model.recipes[row]
@@ -1400,7 +1399,8 @@ class RecipeWindow(QWidget):
                     listing = Exchange.get_listing(recipe.output.id)
                     if listing:
                         quantity_sold_daily = (
-                            listing.average_quantity_sold_daily * (recipe.timeMinutes / 60)
+                            listing.average_quantity_sold_daily
+                            * (recipe.timeMinutes / 60)
                             if recipe.timeMinutes > 0
                             else 0.0
                         )
@@ -1430,24 +1430,30 @@ class RecipeWindow(QWidget):
                 self.recipe_table_model.update_value(row, value)
 
                 self.recipe_table_model.update_consumables(
-                    row, consumable_preferred_combination, consumable_rejected_combination
+                    row,
+                    consumable_preferred_combination,
+                    consumable_rejected_combination,
                 )
-            
+
             # Process next batch or finish
             if end_idx < total_recipes:
                 # Update status if parent window has a status bar
                 parent_window = self.window()
-                if hasattr(parent_window, 'statusBar'):
-                    parent_window.statusBar().showMessage(f"Recalculating recipes: {end_idx}/{total_recipes}...")
-                
+                if hasattr(parent_window, "statusBar"):
+                    parent_window.statusBar().showMessage(
+                        f"Recalculating recipes: {end_idx}/{total_recipes}..."
+                    )
+
                 # Schedule next batch
                 QTimer.singleShot(0, lambda: process_batch(end_idx))
             else:
                 # Finished all batches
                 parent_window = self.window()
-                if hasattr(parent_window, 'statusBar'):
-                    parent_window.statusBar().showMessage("Recipe recalculation complete", 3000)
-        
+                if hasattr(parent_window, "statusBar"):
+                    parent_window.statusBar().showMessage(
+                        "Recipe recalculation complete", 3000
+                    )
+
         # Start processing the first batch
         process_batch(0)
 

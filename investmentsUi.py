@@ -1,42 +1,23 @@
 from typing import List, Dict, Optional, Tuple
 import logging
-import itertools
 from pathlib import Path
-import pickle
-import numpy as np
-import pandas as pd
 from pydantic import BaseModel, Field
 from api.models.gameData import RecipeType
 from PySide6.QtCore import (
     Slot,
-    Signal,
-    QThread,
-    QSize,
     Qt,
     QAbstractTableModel,
     QSortFilterProxyModel,
     QObject,
     QModelIndex,
-    QPersistentModelIndex,
 )
 from PySide6.QtWidgets import (
-    QDialog,
     QHeaderView,
     QTableView,
     QAbstractItemView,
     QVBoxLayout,
-    QHBoxLayout,
-    QGroupBox,
     QWidget,
-    QToolBox,
-    QSlider,
-    QSizePolicy,
     QLabel,
-    QCheckBox,
-    QSplitter,
-    QMenuBar,
-    QWidgetAction,
-    QMainWindow,
     QProgressBar,
 )
 from PySide6.QtGui import QCloseEvent, QWheelEvent, QPixmap, QColor
@@ -45,6 +26,7 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 
 from settings import Settings
+import utils
 from utils import (
     align_add,
     calculate_research_cost,
@@ -192,9 +174,14 @@ class InvestmentsWindow(QWidget):
                         cost = 0
                         for material in building.constructionMaterials:
                             material_listing = Exchange.get_listing(material.id)
-                            if material_listing and material_listing.current_price > 0:
+                            material_price = (
+                                material_listing.average_price
+                                if utils.use_average_price
+                                else material_listing.current_price
+                            )
+                            if material_listing and material_price > 0:
                                 cost += (
-                                    material_listing.current_price * material.am
+                                    material_price * material.am
                                 ) / 100  # Convert cents to dollars
                             else:
                                 _logger.warning(
@@ -248,18 +235,19 @@ class InvestmentsWindow(QWidget):
                     )
                     cost = 0.0
                     for amount, item_id in zip(research_amounts, (64, 65, 127, 164)):
-                        if (
-                            not Exchange.get_listing(item_id)
-                            or Exchange.get_listing(item_id).current_price <= 0
-                        ):
+                        listing = Exchange.get_listing(item_id)
+                        listing_price = (
+                            listing.average_price
+                            if utils.use_average_price
+                            else listing.current_price
+                        )
+                        if not listing or listing_price <= 0:
                             _logger.warning(
                                 f"Excluding technology {specialization.name} level {tech_level} due to missing listing for item ID {item_id}"
                             )
                             cost = 0.0
                             break
-                        cost += (
-                            amount * Exchange.get_listing(item_id).current_price / 100
-                        )
+                        cost += amount * listing_price / 100
                     if cost <= 0:
                         continue
 

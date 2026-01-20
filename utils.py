@@ -10,12 +10,14 @@ import math
 import hashlib
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+
 from api.gameData import GameDataManager
 from api.exchange import Exchange
 from api.models.gameData import Planet, RecipeType, Specialization, WorkerType
 
 # Global flag to control consumable calculation behavior
-USE_ALL_CONSUMABLES = False
+use_all_consumables = False
+use_average_price = False
 
 _logger = logging.getLogger(__name__)
 
@@ -363,11 +365,16 @@ def calculate_profit_and_consumables(
     try:
         building = GameDataManager.get_building(recipe.producedIn)
         listing = Exchange.get_listing(recipe.output.id)
-        base_profit_per_hour = listing.current_price * recipe.output.am / 100
+        listing_price = (
+            listing.average_price if use_average_price else listing.current_price
+        )
+        base_profit_per_hour = listing_price * recipe.output.am / 100
 
         for material_amount in recipe.inputs:
             material_price = (
-                Exchange.get_listing(material_amount.id).current_price / 100
+                Exchange.get_listing(material_amount.id).average_price / 100
+                if use_average_price
+                else Exchange.get_listing(material_amount.id).current_price / 100
             )
             if material_price < 1:
                 return None
@@ -396,7 +403,7 @@ def calculate_profit_and_consumables(
             )
 
         # If USE_ALL_CONSUMABLES is True, use all consumables instead of finding optimal combination
-        if USE_ALL_CONSUMABLES and consumable_id_set:
+        if use_all_consumables and consumable_id_set:
             consumable_preferred_combination = tuple(consumable_id_set)
             consumable_rejected_combination = ()
 
@@ -414,13 +421,14 @@ def calculate_profit_and_consumables(
 
                 for consumable in worker.consumables:
                     consumable_listing = Exchange.get_listing(consumable.matId)
-                    if consumable_listing.current_price < 1:
+                    consumable_price = consumable_listing.average_price if use_average_price else consumable_listing.current_price
+                    if consumable_price < 1:
                         _logger.warning(
                             f"Invalid price for consumable {consumable.matId}"
                         )
                         continue
                     worker_cost_per_hour += (
-                        consumable_listing.current_price  # in cents
+                        consumable_price  # in cents
                         * consumable.amount  # daily consumption per 1000 workers
                         * worker_count  # number of workers
                         / 24  # hours per day
@@ -473,11 +481,12 @@ def calculate_profit_and_consumables(
                                 consumable_listing = Exchange.get_listing(
                                     consumable.matId
                                 )
-                                if consumable_listing.current_price < 1:
+                                consumable_price = consumable_listing.average_price if use_average_price else consumable_listing.current_price
+                                if consumable_price < 1:
                                     combination_valid = False
                                     break
                                 worker_cost_per_hour += (
-                                    consumable_listing.current_price  # in cents
+                                    consumable_price  # in cents
                                     * consumable.amount  # daily consumption per 1000 workers
                                     * worker_count  # number of workers
                                     / 24  # hours per day
@@ -543,13 +552,14 @@ def calculate_profit_and_consumables(
         building_depreciation_per_hour = 0.0
         for material in building.constructionMaterials:
             material_listing = Exchange.get_listing(material.id)
-            if material_listing.current_price < 1:
+            material_price = material_listing.average_price if use_average_price else material_listing.current_price
+            if material_price < 1:
                 _logger.error(
                     f"Cannot calculate building depreciation for {building.name} ({building.id}) due to missing material price."
                 )
                 return None
             building_depreciation_per_hour += (
-                material_listing.current_price  # in cents
+                material_price  # in cents
                 * material.am  # amount of material
                 / (40 * 24)  # 40 days depreciation period
                 / 100  # convert cents to dollars
@@ -564,13 +574,14 @@ def calculate_profit_and_consumables(
             )
             for material in worker_housing_building.constructionMaterials:
                 material_listing = Exchange.get_listing(material.id)
-                if material_listing.current_price < 1:
+                material_price = material_listing.average_price if use_average_price else material_listing.current_price
+                if material_price < 1:
                     _logger.error(
                         f"Cannot calculate worker housing depreciation for {building.name} ({building.id}) due to missing material price."
                     )
                     return None
                 building_depreciation_per_hour += (
-                    material_listing.current_price  # in cents
+                    material_price  # in cents
                     * material.am  # amount of material
                     * (
                         worker_count
