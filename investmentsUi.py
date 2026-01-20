@@ -2,6 +2,7 @@ from typing import List, Dict, Optional, Tuple
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
+from api.models.company import Base
 from api.models.gameData import RecipeType
 from PySide6.QtCore import (
     Slot,
@@ -60,6 +61,8 @@ class InvestmentsWindow(QWidget):
             self.profit_max = 1.0
             self.roi_min = 0.0
             self.roi_max = 1000.0  # Default max ROI in days
+
+            self.base_dict: Dict[int, Base] = {}  # base_id: Base
 
         def rowCount(self, /, parent=None) -> int:
             return len(self.table_data)
@@ -149,6 +152,8 @@ class InvestmentsWindow(QWidget):
             self.beginResetModel()
             self.table_data = []
 
+            tech_profit_dict: Dict[Specialization:float] = {}
+
             try:
                 game_data = GameDataManager.get()
 
@@ -205,6 +210,21 @@ class InvestmentsWindow(QWidget):
                             continue
                         recipe_name, profit_per_hour, _, _ = res
 
+                        # Add to running total for specialization tech profits
+                        # Find number of buildings currently in use
+                        num_building_levels = 0.0
+                        for base in self.base_dict.values():
+                            num_building_levels += sum(
+                                slot.building.level
+                                for slot in base.building_slots
+                                if slot.building and slot.building.type == building.id
+                            )
+                        if num_building_levels > 0:
+                            tech_profit_dict[specialization] = (
+                                profit_per_hour * num_building_levels
+                                + tech_profit_dict.get(specialization, 0.0)
+                            )
+
                         # Calculate ROI in days (cost / profit per hour / 24)
                         roi_days = (
                             cost / profit_per_hour / 24
@@ -259,9 +279,12 @@ class InvestmentsWindow(QWidget):
                         find_best_recipe_for_technology(specialization, tech_level + 1)
                     )
 
+                    # Calculate efficiency gained from tech level increase
+                    efficiency_gain = tech_profit_dict.get(specialization, 0.0) * 0.05
+
                     # Calculate ROI
                     profit_increase_per_hour = (
-                        new_profit_per_hour - current_profit_per_hour
+                        efficiency_gain + new_profit_per_hour - current_profit_per_hour
                     )
                     roi_days = (
                         cost / profit_increase_per_hour / 24
@@ -462,3 +485,9 @@ class InvestmentsWindow(QWidget):
             )
         finally:
             self.progress_bar.setVisible(False)
+
+    @Slot(Base)
+    def handle_base_loaded(self, base: Base) -> None:
+        """Handle a new base being loaded."""
+        self.investments_table_model.base_dict[base.id] = base
+        self.investments_table_model.populate_investments()

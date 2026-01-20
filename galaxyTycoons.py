@@ -61,6 +61,9 @@ class MainWindow(QMainWindow):
         self.recipe_tab = RecipeWindow(self, self.recipe_worker, self.settings)
         self.planets_tab = PlanetsWindow(self)
         self.investments_tab = InvestmentsWindow(self, self.settings)
+        self.company_data_manager.base_loaded.connect(
+            self.investments_tab.handle_base_loaded
+        )
         self.configuration_tab = ConfigurationWindow(
             self, self.settings, self.recipe_worker, self.company_data_manager
         )
@@ -199,6 +202,7 @@ class MainWindow(QMainWindow):
             # Trigger recalculation of recipes
             self.recipe_tab.handle_exchange_updated()
             self.configuration_tab.handle_exchange_updated()
+            self.investments_tab.handle_exchange_updated()
         finally:
             # Re-enable the action and clear status message
             self.statusBar().showMessage("Recalculation complete", 3000)
