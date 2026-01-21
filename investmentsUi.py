@@ -32,7 +32,6 @@ from utils import (
     align_add,
     calculate_research_cost,
     find_best_recipe_for_building,
-    calculate_profit_and_consumables,
     find_best_recipe_for_technology,
 )
 from api.gameData import GameDataManager

@@ -1304,7 +1304,12 @@ class RecipeWindow(QWidget):
         building = GameDataManager.get_building(recipe.producedIn)
 
         # Calculate profit and consumables
-        result = calculate_profit_and_consumables(recipe)
+        result = calculate_profit_and_consumables(
+            recipe,
+            self.settings.tech_level_filters[
+                GameDataManager.get_building(recipe.producedIn).specialization
+            ],
+        )
         if result is None:
             profit_per_hour = float("-inf")
             consumable_preferred_combination = ()
@@ -1381,7 +1386,12 @@ class RecipeWindow(QWidget):
             # Process a batch of recipes
             for row in range(start_idx, end_idx):
                 recipe = self.recipe_table_model.recipes[row]
-                result = calculate_profit_and_consumables(recipe)
+                result = calculate_profit_and_consumables(
+                    recipe,
+                    self.settings.tech_level_filters[
+                        GameDataManager.get_building(recipe.producedIn).specialization
+                    ],
+                )
                 if result is None:
                     profit_per_hour = float("-inf")
                     consumable_preferred_combination = ()

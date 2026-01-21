@@ -349,7 +349,7 @@ def align_add(
 
 
 def calculate_profit_and_consumables(
-    recipe, abundance: float = 1.0
+    recipe, tech_level: int = 0, abundance: float = 1.0
 ) -> None | tuple[float, tuple[int, ...], tuple[int, ...]]:
     """
     Calculate the profit per hour and the preferred consumable combination for a given recipe.
@@ -381,7 +381,10 @@ def calculate_profit_and_consumables(
             base_profit_per_hour -= material_price * material_amount.am
 
         base_profit_per_hour = (
-            base_profit_per_hour * abundance / (recipe.timeMinutes / 60)
+            base_profit_per_hour
+            * (1 + 0.05 * tech_level)
+            * abundance
+            / (recipe.timeMinutes / 60)
         )
 
         # Calculate worker cost
@@ -421,7 +424,11 @@ def calculate_profit_and_consumables(
 
                 for consumable in worker.consumables:
                     consumable_listing = Exchange.get_listing(consumable.matId)
-                    consumable_price = consumable_listing.average_price if use_average_price else consumable_listing.current_price
+                    consumable_price = (
+                        consumable_listing.average_price
+                        if use_average_price
+                        else consumable_listing.current_price
+                    )
                     if consumable_price < 1:
                         _logger.warning(
                             f"Invalid price for consumable {consumable.matId}"
@@ -481,7 +488,11 @@ def calculate_profit_and_consumables(
                                 consumable_listing = Exchange.get_listing(
                                     consumable.matId
                                 )
-                                consumable_price = consumable_listing.average_price if use_average_price else consumable_listing.current_price
+                                consumable_price = (
+                                    consumable_listing.average_price
+                                    if use_average_price
+                                    else consumable_listing.current_price
+                                )
                                 if consumable_price < 1:
                                     combination_valid = False
                                     break
@@ -552,7 +563,11 @@ def calculate_profit_and_consumables(
         building_depreciation_per_hour = 0.0
         for material in building.constructionMaterials:
             material_listing = Exchange.get_listing(material.id)
-            material_price = material_listing.average_price if use_average_price else material_listing.current_price
+            material_price = (
+                material_listing.average_price
+                if use_average_price
+                else material_listing.current_price
+            )
             if material_price < 1:
                 _logger.error(
                     f"Cannot calculate building depreciation for {building.name} ({building.id}) due to missing material price."
@@ -574,7 +589,11 @@ def calculate_profit_and_consumables(
             )
             for material in worker_housing_building.constructionMaterials:
                 material_listing = Exchange.get_listing(material.id)
-                material_price = material_listing.average_price if use_average_price else material_listing.current_price
+                material_price = (
+                    material_listing.average_price
+                    if use_average_price
+                    else material_listing.current_price
+                )
                 if material_price < 1:
                     _logger.error(
                         f"Cannot calculate worker housing depreciation for {building.name} ({building.id}) due to missing material price."
@@ -646,7 +665,7 @@ def find_best_recipe_for_technology(
             building = GameDataManager.get_building(recipe.producedIn)
             if building.specialization != specialization:
                 continue
-            result = calculate_profit_and_consumables(recipe)
+            result = calculate_profit_and_consumables(recipe, tech_level=max_tech_level)
             if result is None:
                 continue
             profit, preferred, rejected = result
@@ -671,7 +690,7 @@ def find_best_recipe_for_technology(
 
 
 def find_best_recipe_for_building(
-    building_id: int, tech_level: int = float("inf"), planet: Optional[Planet] = None
+    building_id: int, tech_level: int = None, planet: Optional[Planet] = None
 ) -> None | Tuple[str, float, tuple[int, ...], tuple[int, ...]]:
     """
     Find the best recipe (highest profit/hr) for a given building and tech level.
@@ -696,10 +715,12 @@ def find_best_recipe_for_building(
         for recipe in game_data.recipes:
             if recipe.producedIn != building_id:
                 continue
-            if recipe.reqTech > tech_level:
+            if tech_level is not None and recipe.reqTech > tech_level:
                 continue
             if recipe.type == RecipeType.PRODUCTION:
-                result = calculate_profit_and_consumables(recipe)
+                result = calculate_profit_and_consumables(
+                    recipe, tech_level=0 if tech_level is None else tech_level
+                )
 
                 if result is None:
                     continue
@@ -718,7 +739,9 @@ def find_best_recipe_for_building(
                 if planet_material is None:
                     continue
                 result = calculate_profit_and_consumables(
-                    recipe, abundance=planet_material.ab / 100.0
+                    recipe,
+                    tech_level=0 if tech_level is None else tech_level,
+                    abundance=planet_material.ab / 100.0,
                 )
                 if result is None:
                     continue
