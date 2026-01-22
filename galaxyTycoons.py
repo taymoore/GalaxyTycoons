@@ -110,6 +110,7 @@ class MainWindow(QMainWindow):
 
         tools_menu = menubar.addMenu("Tools")
 
+        # Copy Listings
         copy_listings_action = QAction("Copy Listings to Clipboard", self)
         copy_listings_action.triggered.connect(self._copy_listings_to_clipboard)
         tools_menu.addAction(copy_listings_action)
@@ -154,6 +155,9 @@ class MainWindow(QMainWindow):
             lines.append(
                 f"{listing.name}\t{listing_price / 100 if listing_price > 0 else 'N/A'}"
             )
+            # lines.append(
+            #     f"{listing.name}\t{GameDataManager.get().materials_dict[listing.id].weight}"
+            # )
 
         # Join with newlines
         table_text = "\n".join(lines)
