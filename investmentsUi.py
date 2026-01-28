@@ -174,30 +174,56 @@ class InvestmentsWindow(QWidget):
                         ):
                             continue
 
-                        # Calculate building cost from construction materials
-                        cost = 0
-                        for material in building.constructionMaterials:
-                            material_listing = Exchange.get_listing(material.id)
-                            material_price = (
-                                material_listing.average_price
-                                if utils.use_average_price
-                                else material_listing.current_price
-                            )
-                            if material_listing and material_price > 0:
-                                cost += (
-                                    material_price * material.am
-                                ) / 100  # Convert cents to dollars
-                            else:
-                                _logger.warning(
-                                    f"Excluding building {building.name} due to missing listing for material ID {material.id}"
+                        def _calculate_construction_cost(
+                            building: Building,
+                        ) -> float:
+                            # Calculate building cost from construction materials
+                            cost = 0
+                            for material in building.constructionMaterials:
+                                material_listing = Exchange.get_listing(material.id)
+                                material_price = (
+                                    material_listing.average_price
+                                    if utils.use_average_price
+                                    else material_listing.current_price
                                 )
-                                continue
+                                if material_listing and material_price > 0:
+                                    cost += (
+                                        material_price * material.am
+                                    ) / 100  # Convert cents to dollars
+                                else:
+                                    _logger.warning(
+                                        f"Excluding building {building.name} due to missing listing for material ID {material.id}"
+                                    )
+                                    continue
 
-                        if cost <= 0:
-                            _logger.warning(
-                                f"Excluding building {building.name} due to invalid construction cost"
-                            )
-                            continue  # Skip buildings with invalid costs
+                            if cost <= 0:
+                                _logger.warning(
+                                    f"Excluding building {building.name} due to invalid construction cost"
+                                )
+                            return cost
+
+                        cost = _calculate_construction_cost(building)
+
+                        # Add housing cost for worker housing buildings
+                        for worker_count, worker_type in zip(
+                            building.workersNeeded or [],
+                            WorkerType,
+                        ):
+                            if worker_count > 0:
+                                housing_building = GameDataManager.get_worker_housing(
+                                    worker_type
+                                )
+                                housing_capacity = housing_building.workersHousing[
+                                    worker_type.value - 1
+                                ]
+                                # Assumes housing only provides for one type of worker at a time. This will be a bug otherwise.
+                                housing_cost = _calculate_construction_cost(
+                                    housing_building
+                                ) * worker_count / housing_capacity
+                                cost += (
+                                    housing_cost
+                                )
+
 
                         # Find best recipe for this building
                         specialization = building.specialization
