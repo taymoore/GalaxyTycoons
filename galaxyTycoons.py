@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
 
         # Initialize the sub-windows
         self.recipe_tab = RecipeWindow(self, self.recipe_worker, self.settings)
-        self.planets_tab = PlanetsWindow(self)
+        # self.planets_tab = PlanetsWindow(self)
         self.investments_tab = InvestmentsWindow(self, self.settings)
         self.company_data_manager.base_loaded.connect(
             self.investments_tab.handle_base_loaded
@@ -74,7 +74,7 @@ class MainWindow(QMainWindow):
 
         # Add tabs
         self.tabs.addTab(self.recipe_tab, "Recipes & Profits")
-        self.tabs.addTab(self.planets_tab, "Planets")
+        # self.tabs.addTab(self.planets_tab, "Planets")
         self.tabs.addTab(self.investments_tab, "Investments")
         self.tabs.addTab(self.configuration_tab, "Configuration")
 
@@ -236,7 +236,7 @@ class MainWindow(QMainWindow):
 
         # Manually call closeEvent on tabs to trigger their specific cleanup logic
         self.recipe_tab.close()
-        self.planets_tab.close()
+        # self.planets_tab.close()
         self.investments_tab.close()
         self.configuration_tab.close()
 

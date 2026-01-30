@@ -1,3 +1,4 @@
+import math
 from typing import List, Dict, Optional, Tuple
 import logging
 from pathlib import Path
@@ -153,6 +154,16 @@ class InvestmentsWindow(QWidget):
 
             tech_profit_dict: Dict[Specialization:float] = {}
 
+            # Get min level of each building
+            building_min_level: Dict[int, int] = {}  # building_id: min_level
+            for base in self.base_dict.values():
+                for slot in base.building_slots:
+                    if slot.building:
+                        building_min_level[slot.building.type] = min(
+                            building_min_level.get(slot.building.type, float("inf")),
+                            slot.building.level,
+                        )
+
             try:
                 game_data = GameDataManager.get()
 
@@ -174,56 +185,80 @@ class InvestmentsWindow(QWidget):
                         ):
                             continue
 
-                        def _calculate_construction_cost(
-                            building: Building,
+                        def _calculate_investment_cost(
+                            building: Building, level: int | None = None
                         ) -> float:
-                            # Calculate building cost from construction materials
-                            cost = 0
-                            for material in building.constructionMaterials:
-                                material_listing = Exchange.get_listing(material.id)
-                                material_price = (
-                                    material_listing.average_price
-                                    if utils.use_average_price
-                                    else material_listing.current_price
+                            def _calculate_construction_cost(
+                                building: Building, level: int | None = None
+                            ) -> float:
+                                # Calculate building cost from construction materials
+                                growth_factor = (
+                                    0.1 * level + 1.07**level
+                                    if level and level >= 0
+                                    else 1.0
                                 )
-                                if material_listing and material_price > 0:
-                                    cost += (
-                                        material_price * material.am
-                                    ) / 100  # Convert cents to dollars
-                                else:
-                                    _logger.warning(
-                                        f"Excluding building {building.name} due to missing listing for material ID {material.id}"
+                                cost = 0
+                                for material in building.constructionMaterials:
+                                    material_listing = Exchange.get_listing(material.id)
+                                    material_price = (
+                                        material_listing.average_price
+                                        if utils.use_average_price
+                                        else material_listing.current_price
                                     )
-                                    continue
+                                    material_amount = math.ceil(
+                                        material.am * growth_factor
+                                    )
+                                    if material_listing and material_price > 0:
+                                        cost += (
+                                            material_price * material_amount
+                                        ) / 100  # Convert cents to dollars
+                                    else:
+                                        _logger.warning(
+                                            f"Excluding building {building.name} due to missing listing for material ID {material.id}"
+                                        )
+                                        continue
 
-                            if cost <= 0:
-                                _logger.warning(
-                                    f"Excluding building {building.name} due to invalid construction cost"
-                                )
+                                if cost <= 0:
+                                    _logger.warning(
+                                        f"Excluding building {building.name} due to invalid construction cost"
+                                    )
+                                return cost
+
+                            cost = _calculate_construction_cost(building, level)
+
+                            # Add housing cost for worker housing buildings
+                            for worker_count, worker_type in zip(
+                                building.workersNeeded or [],
+                                WorkerType,
+                            ):
+                                if worker_count > 0:
+                                    housing_building = (
+                                        GameDataManager.get_worker_housing(worker_type)
+                                    )
+                                    housing_capacity = housing_building.workersHousing[
+                                        worker_type.value - 1
+                                    ]
+                                    # Assumes housing only provides for one type of worker at a time. This will be a bug otherwise.
+                                    housing_cost = (
+                                        _calculate_construction_cost(
+                                            housing_building, level
+                                        )
+                                        * worker_count
+                                        / housing_capacity
+                                    )
+                                    cost += housing_cost
+
                             return cost
 
-                        cost = _calculate_construction_cost(building)
-
-                        # Add housing cost for worker housing buildings
-                        for worker_count, worker_type in zip(
-                            building.workersNeeded or [],
-                            WorkerType,
-                        ):
-                            if worker_count > 0:
-                                housing_building = GameDataManager.get_worker_housing(
-                                    worker_type
-                                )
-                                housing_capacity = housing_building.workersHousing[
-                                    worker_type.value - 1
-                                ]
-                                # Assumes housing only provides for one type of worker at a time. This will be a bug otherwise.
-                                housing_cost = _calculate_construction_cost(
-                                    housing_building
-                                ) * worker_count / housing_capacity
-                                cost += (
-                                    housing_cost
-                                )
-
+                        # Calculate cost
+                        base_cost = _calculate_investment_cost(building)
+                        upgrade_cost = (
+                            _calculate_investment_cost(
+                                building, building_min_level[building.id]
+                            )
+                            if building.id in building_min_level
+                            else None
+                        )
 
                         # Find best recipe for this building
                         specialization = building.specialization
@@ -252,7 +287,7 @@ class InvestmentsWindow(QWidget):
 
                         # Calculate ROI in days (cost / profit per hour / 24)
                         roi_days = (
-                            cost / profit_per_hour / 24
+                            base_cost / profit_per_hour / 24
                             if profit_per_hour > 0
                             else float("inf")
                         )
@@ -261,11 +296,27 @@ class InvestmentsWindow(QWidget):
                         self.table_data.append(
                             [
                                 f"{building.name} ({recipe_name})",
-                                cost,
+                                base_cost,
                                 profit_per_hour,
                                 roi_days,
                             ]
                         )
+
+                        if upgrade_cost is not None and upgrade_cost > 0:
+                            # Calculate ROI for upgrade
+                            upgrade_roi_days = (
+                                upgrade_cost / profit_per_hour / 24
+                                if profit_per_hour > 0
+                                else float("inf")
+                            )
+                            self.table_data.append(
+                                [
+                                    f"{building.name} Upgrade ({recipe_name}) [{building_min_level[building.id]}]",
+                                    upgrade_cost,
+                                    profit_per_hour,
+                                    upgrade_roi_days,
+                                ]
+                            )
                     except Exception as e:
                         _logger.error(f"Error processing building {building.name}: {e}")
 

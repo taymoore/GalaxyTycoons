@@ -13,7 +13,13 @@ import matplotlib.colors as mcolors
 
 from api.gameData import GameDataManager
 from api.exchange import Exchange
-from api.models.gameData import Planet, RecipeType, Specialization, WorkerType
+from api.models.gameData import (
+    MaterialAmount,
+    Planet,
+    RecipeType,
+    Specialization,
+    WorkerType,
+)
 
 # Global flag to control consumable calculation behavior
 use_all_consumables = False
