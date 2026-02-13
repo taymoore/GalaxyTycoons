@@ -1,10 +1,12 @@
 import logging
-from PySide6.QtCore import QSize, QThread, Signal
+from PySide6.QtCore import QSize, QThread, Signal, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QTabWidget
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication
 
+from api.models.company import Base
+from baseUi import BaseWindow
 import utils
 from api.gameData import GameDataManager
 from api.exchange import Exchange
@@ -26,6 +28,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Game Data Tool")
         self.resize(QSize(1400, 800))
+
+        self.base_uis = {}
 
         # Create status bar
         self.statusBar().showMessage("Ready")
@@ -64,6 +68,7 @@ class MainWindow(QMainWindow):
         self.company_data_manager.base_loaded.connect(
             self.investments_tab.handle_base_loaded
         )
+        self.company_data_manager.base_loaded.connect(self.handle_base_loaded)
         self.configuration_tab = ConfigurationWindow(
             self, self.settings, self.recipe_worker, self.company_data_manager
         )
@@ -96,6 +101,10 @@ class MainWindow(QMainWindow):
         # Create menubar
         self._create_menubar()
 
+        # Start loading company data
+        self.fetch_company_signal.emit()
+
+    @Slot(int)
     def handle_tab_change(self, index: int) -> None:
         # If index is Configuration or Investments tab
         if index == self.tabs.indexOf(
@@ -103,6 +112,15 @@ class MainWindow(QMainWindow):
         ) or index == self.tabs.indexOf(self.investments_tab):
             _logger.debug("Emitting fetch_company_signal due to tab change.")
             self.fetch_company_signal.emit()
+
+    @Slot(Base)
+    def handle_base_loaded(self, base: Base) -> None:
+        if base.id not in self.base_uis.keys():
+            self.base_uis[base.id] = BaseWindow(self, base)
+            self.tabs.addTab(self.base_uis[base.id], base.name)
+            self.company_data_manager.base_loaded.connect(
+                self.base_uis[base.id].handle_base_updated
+            )
 
     def _create_menubar(self) -> None:
         """Create the menubar with export options."""

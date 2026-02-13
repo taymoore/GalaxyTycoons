@@ -1,75 +1,71 @@
-from tkinter import SE
-from typing import List, Dict
 import logging
-import itertools
 import math
-from pathlib import Path
-import pickle
+from typing import Dict, List
+
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 import numpy as np
 import pandas as pd
+import pyqtgraph as pg
 from pydantic import BaseModel, Field
 from PySide6.QtCore import (
-    Slot,
-    Signal,
-    QThread,
-    Qt,
     QAbstractTableModel,
-    QSortFilterProxyModel,
-    QObject,
     QModelIndex,
+    QObject,
     QPersistentModelIndex,
     QPointF,
+    QSortFilterProxyModel,
+    Qt,
+    QThread,
     QTimer,
-)
-from PySide6.QtWidgets import (
-    QHeaderView,
-    QTableView,
-    QAbstractItemView,
-    QVBoxLayout,
-    QHBoxLayout,
-    QGroupBox,
-    QWidget,
-    QToolBox,
-    QSlider,
-    QSizePolicy,
-    QLabel,
-    QCheckBox,
-    QSplitter,
-    QStyledItemDelegate,
-    QStyleOptionViewItem,
-    QStyle,
+    Signal,
+    Slot,
 )
 from PySide6.QtGui import (
-    QCloseEvent,
-    QWheelEvent,
-    QColor,
     QBrush,
-    QPalette,
-    QTextLayout,
-    QTextCharFormat,
+    QCloseEvent,
+    QColor,
     QPainter,
+    QPalette,
+    QTextCharFormat,
+    QTextLayout,
     QTextOption,
+    QWheelEvent,
 )
-import pyqtgraph as pg
-import matplotlib.colors as mcolors
-import matplotlib.cm as cm
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QSizePolicy,
+    QSlider,
+    QSplitter,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QTableView,
+    QToolBox,
+    QVBoxLayout,
+    QWidget,
+)
 
+from api.exchange import Exchange
+from api.gameData import GameDataManager
+from api.models.exchange import Listing
+from api.models.gameData import Building, Recipe, Specialization, WorkerType
+from recipeWorker import RecipeWorker
 from settings import Settings
-import utils
 from utils import (
-    align_add,
-    calculate_profit_and_consumables,
+    BuildingColorDelegate,
     ConsumablesDelegate,
     GradientColorDelegate,
     SpecializationColorDelegate,
-    BuildingColorDelegate,
+    align_add,
+    calculate_profit_and_consumables,
     format_consumables,
 )
-from api.gameData import GameDataManager
-from api.models.gameData import Recipe, Specialization, Building, WorkerType
-from api.exchange import Exchange
-from api.models.exchange import Listing
-from recipeWorker import RecipeWorker
 
 _logger = logging.getLogger(__name__)
 
