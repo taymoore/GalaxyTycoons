@@ -546,14 +546,14 @@ class RecipeWindow(QWidget):
                 # Constrain X to non-negative values with slight padding on the right
                 self.p1.vb.autoRange()
 
-                SHOW_TWO_WEEKS = False
-                if SHOW_TWO_WEEKS:
-                    # Limit x-axis width to 2 weeks maximum, showing latest data
-                    two_weeks_seconds = 14 * 24 * 60 * 60
+                LIMIT_X_AXIS = True
+                if LIMIT_X_AXIS:
+                    # Limit x-axis width to 1 month maximum, showing latest data
+                    one_month_seconds = 30 * 24 * 60 * 60
                     x_min, x_max = self.p1.vb.viewRange()[0]
                     x_range = x_max - x_min
-                    if x_range > two_weeks_seconds:
-                        x_min = x_max - two_weeks_seconds
+                    if x_range > one_month_seconds:
+                        x_min = x_max - one_month_seconds
                         self.p1.vb.setXRange(x_min, x_max, padding=0)
             except Exception as e:
                 _logger.error(f"Error plotting recipe {recipe.id}: {e}", exc_info=True)

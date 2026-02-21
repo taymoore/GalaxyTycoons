@@ -7,7 +7,7 @@ from functools import lru_cache
 import os
 from dotenv import load_dotenv
 
-from api.models.gameData import GameData, Building, Recipe, Worker, WorkerType
+from api.models.gameData import GameData, Building, Material, Recipe, Worker, WorkerType
 
 # Load environment variables from .env file
 load_dotenv()
@@ -141,6 +141,21 @@ class GameDataManager:
         if not recipes:
             raise ValueError(f"No recipe found producing item ID {item_id}.")
         return recipes
+
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def get_recipe_by_id(recipe_id: int) -> Recipe:
+        """Get a recipe by ID."""
+        for recipe in GameDataManager.get().recipes:
+            if recipe.id == recipe_id:
+                return recipe
+        raise ValueError(f"Recipe with ID {recipe_id} not found.")
+
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def get_material_by_id(material_id: int) -> Optional[Material]:
+        """Get a material by ID."""
+        return GameDataManager.get().materials_dict.get(material_id)
 
     @staticmethod
     @lru_cache(maxsize=None)

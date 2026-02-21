@@ -119,7 +119,7 @@ class MainWindow(QMainWindow):
             self.base_uis[base.id] = BaseWindow(self, base)
             self.tabs.addTab(self.base_uis[base.id], base.name)
             self.company_data_manager.base_loaded.connect(
-                self.base_uis[base.id].handle_base_updated
+                self.base_uis[base.id].handle_base_loaded
             )
 
     def _create_menubar(self) -> None:
