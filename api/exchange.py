@@ -1,3 +1,4 @@
+import time
 from typing import Dict, Optional
 import logging
 import pickle
@@ -19,7 +20,7 @@ _logger = logging.getLogger(__name__)
 
 class Exchange(QObject):
     """Manages exchange listings caching, fetching, and retrieval."""
-    
+
     # Signal emitted when exchange data is updated
     exchange_updated_signal = Signal()
 
@@ -32,14 +33,14 @@ class Exchange(QObject):
     listings: Dict[int, Listing] = {}
     updated_time: Optional[datetime] = None
     session = Session()
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(Exchange, cls).__new__(cls)
         return cls._instance
-        
+
     def __init__(self):
-        if not hasattr(self, '_initialized'):
+        if not hasattr(self, "_initialized"):
             super().__init__()
             self._initialized = True
 
@@ -67,8 +68,12 @@ class Exchange(QObject):
             if cache2_path.exists():
                 with open(cache2_path, "rb") as f:
                     listings2, _ = pickle.load(f)
-                for listing1, listing2 in zip(Exchange.listings.values(), listings2.values()):
-                    listing1.dataframe = listing1.dataframe.combine_first(listing2.dataframe)
+                for listing1, listing2 in zip(
+                    Exchange.listings.values(), listings2.values()
+                ):
+                    listing1.dataframe = listing1.dataframe.combine_first(
+                        listing2.dataframe
+                    )
                 # delete cache2 after merging
                 cache2_path.unlink()
                 _logger.info("Merged additional game data from second cache file.")
@@ -115,6 +120,9 @@ class Exchange(QObject):
             response = Exchange.session.get(url, headers=headers)
             if response.status_code == 429:
                 _logger.warning("Rate limited by exchange API.")
+                sleep_time = int(response.headers.get("Retry-After", 60))
+                _logger.info(f"Sleep for {sleep_time} seconds before retrying.")
+                time.sleep(sleep_time)
                 return
             response.raise_for_status()
             try:
@@ -157,7 +165,7 @@ class Exchange(QObject):
         _logger.info(
             f"Exchange listings updated. Total listings: {len(Exchange.listings)}"
         )
-        
+
         # Emit signal that exchange data has been updated
         Exchange._instance.exchange_updated_signal.emit()
 

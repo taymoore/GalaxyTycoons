@@ -2,6 +2,7 @@ from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
 from enum import IntEnum
 
+
 class RecipeType(IntEnum):
     EXTRACTION = 1
     PRODUCTION = 2

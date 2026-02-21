@@ -1,4 +1,5 @@
 import logging
+from typing import Dict
 from PySide6.QtCore import QSize, QThread, Signal, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QTabWidget
@@ -29,7 +30,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Game Data Tool")
         self.resize(QSize(1400, 800))
 
-        self.base_uis = {}
+        self.base_uis: Dict[int, BaseWindow] = {}
 
         # Create status bar
         self.statusBar().showMessage("Ready")
@@ -116,11 +117,33 @@ class MainWindow(QMainWindow):
     @Slot(Base)
     def handle_base_loaded(self, base: Base) -> None:
         if base.id not in self.base_uis.keys():
-            self.base_uis[base.id] = BaseWindow(self, base)
+            self.base_uis[base.id] = BaseWindow(
+                self, self.company_data_manager.fetch_company()
+            )
             self.tabs.addTab(self.base_uis[base.id], base.name)
             self.company_data_manager.base_loaded.connect(
                 self.base_uis[base.id].handle_base_loaded
             )
+            self.company_data_manager.company_loaded.connect(
+                self.base_uis[base.id].handle_company_loaded
+            )
+            self.base_uis[base.id].update_tab_name_signal.connect(self.update_tab_name)
+            self.base_uis[base.id].handle_base_loaded(base)
+
+    @Slot(int, str)
+    def update_tab_name(self, base_id: int, new_name: str) -> None:
+        if base_id not in self.base_uis:
+            _logger.warning(
+                f"Received request to update tab name for unknown base_id {base_id}"
+            )
+            return
+        index = self.tabs.indexOf(self.base_uis[base_id])
+        if index == -1:
+            _logger.warning(
+                f"Received request to update tab name for base_id {base_id} but tab not found"
+            )
+            return
+        self.tabs.setTabText(index, new_name)
 
     def _create_menubar(self) -> None:
         """Create the menubar with export options."""
