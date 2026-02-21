@@ -1,6 +1,7 @@
+from enum import IntEnum
 import logging
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
@@ -74,6 +75,11 @@ _logger = logging.getLogger(__name__)
 
 
 class BaseWindow(QWidget):
+
+    class RecipeStatus(IntEnum):
+        IN_PROGRESS = 1
+        STANDBY = 2
+        NO_MATERIALS = 3
 
     class ProductTableModel(QAbstractTableModel):
         def __init__(self, parent: QWidget):
@@ -230,15 +236,14 @@ class BaseWindow(QWidget):
                     return self._headers[section]
             return None
 
-        def set_production_orders(
-            self, production_orders: List[Tuple[ProductionOrder, bool]]
+        def set_recipes(
+            self, recipes: List[Tuple[Recipe, "BaseWindow.RecipeStatus", Optional[int]]]
         ):
             """Populate the table with production orders."""
             self.beginResetModel()
             self._data.clear()
 
-            for order, in_progress in production_orders:
-                recipe = GameDataManager.get_recipe_by_id(order.recipe_id)
+            for recipe, status, amount in recipes:
                 if recipe:
                     # Get output name
                     output_name = GameDataManager.get_item_name(recipe.output.id)
@@ -258,10 +263,10 @@ class BaseWindow(QWidget):
                         (
                             recipe.id,
                             output_name,
-                            order.amount,
+                            amount,
                             building_name,
                             inputs_str,
-                            in_progress,
+                            status.name.replace("_", " ").title(),
                         )
                     )
 
@@ -344,21 +349,33 @@ class BaseWindow(QWidget):
                     materials_dict.get(consumable.material_id, 0)
                     - consumable.rate * DAYS_CONSUMABLE_BUFFER
                 )
-                if (
-                    materials_dict[consumable.material_id] < 1
-                    and materials_dict[consumable.material_id] > -1
-                ):
-                    materials_dict.pop(consumable.material_id)
+
+        # Remove materials with zero amounts
+        for mat_id in [
+            mat_id
+            for mat_id, amount in materials_dict.items()
+            if amount > -1 and amount < 1
+        ]:
+            materials_dict.pop(mat_id)
 
         # Populate the ProductTable with materials
         self.product_table_model.set_materials(
             materials_dict, self.price_delta_delegate
         )
 
-        # Populate the RecipeTable with production orders
-        self.recipe_table_model.set_production_orders(
-            [(order, True) for order in base.production_orders]
-        )
+        recipes_dict: Dict[
+            int, Tuple[Recipe, BaseWindow.RecipeStatus, Optional[int]]
+        ] = (
+            {}
+        )  # Dict of recipe_id to (Recipe, RecipeStatus, amount in progress / available)
+        for order in base.production_orders:
+            recipes_dict[order.recipe_id] = (
+                GameDataManager.get_recipe_by_id(order.recipe_id),
+                BaseWindow.RecipeStatus.IN_PROGRESS,
+                order.amount + recipes_dict.get(order.recipe_id, (None, None, 0))[2],
+            )
+
+        recipes = list(recipes_dict.values())
 
         # Find all buildings
         building_types: Dict[BuildingType, int] = {}  # Dict of building type to count
@@ -369,6 +386,38 @@ class BaseWindow(QWidget):
                 building_types.get(building_slot.building.type, 0)
                 + building_slot.building.level
             )
+
+        # Find potential recipes that we have materials for but are not currently producing (standby)
+        for recipe in GameDataManager.get().recipes:
+            if recipe.producedIn not in building_types:
+                continue
+            potential_amount = math.inf
+            for input_mat in recipe.inputs:
+                if materials_dict.get(input_mat.id, 0) < input_mat.am:
+                    potential_amount = 0
+                    break
+                potential_amount = min(
+                    potential_amount,
+                    materials_dict.get(input_mat.id, 0) // input_mat.am,
+                )
+            if potential_amount == math.inf:
+                _logger.warning(
+                    f"Recipe {GameDataManager.get_item_name(recipe.output.id)} [{recipe.id}] has no inputs, skipping standby check."
+                )
+                continue
+            if potential_amount == 0:
+                continue
+            for input_mat in recipe.inputs:
+                materials_dict[input_mat.id] = (
+                    materials_dict[input_mat.id] - input_mat.am * potential_amount
+                )
+                assert (
+                    materials_dict[input_mat.id] >= 0
+                ), f"Material {input_mat.id} went negative for recipe {recipe.id} standby calculation."
+            recipes.append((recipe, BaseWindow.RecipeStatus.STANDBY, potential_amount))
+
+        # Populate the RecipeTable with production orders
+        self.recipe_table_model.set_recipes(recipes)
 
         # Calculate production time
         production_time_minutes: Dict[int, float] = (
