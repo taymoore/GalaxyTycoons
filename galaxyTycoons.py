@@ -107,10 +107,7 @@ class MainWindow(QMainWindow):
 
     @Slot(int)
     def handle_tab_change(self, index: int) -> None:
-        # If index is Configuration or Investments tab
-        if index == self.tabs.indexOf(
-            self.configuration_tab
-        ) or index == self.tabs.indexOf(self.investments_tab):
+        if index >= self.tabs.indexOf(self.configuration_tab):
             _logger.debug("Emitting fetch_company_signal due to tab change.")
             self.fetch_company_signal.emit()
 

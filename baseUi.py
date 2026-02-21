@@ -88,7 +88,7 @@ class BaseWindow(QWidget):
                 []
             )  # (material_id, name, amount, price_delta)
             self._headers = ["Material", "Amount", "Price Δ"]
-            self._sort_column = 1  # Default sort by Amount
+            self._sort_column = 2  # Default sort by Price
             self._sort_order = Qt.SortOrder.DescendingOrder
 
         def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
@@ -165,7 +165,7 @@ class BaseWindow(QWidget):
                 )
                 if material:
                     self._data.append(
-                        (material_id, material.sName, amount, price_delta / 100)
+                        (material_id, material.name, amount, price_delta / 100)
                     )
 
             # Apply current sort order
