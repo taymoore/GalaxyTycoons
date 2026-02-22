@@ -200,10 +200,19 @@ class BaseWindow(QWidget):
     class RecipeTableModel(QAbstractTableModel):
         def __init__(self, parent: QWidget):
             super().__init__(parent)
-            self._data: List[tuple[int, str, int, str, str, bool]] = (
+            self._data: List[
+                tuple[int, str, Optional[int], Optional[float], str, str, str]
+            ] = (
                 []
-            )  # (recipe_id, output_name, amount, building_name, inputs, in_progress)
-            self._headers = ["Recipe", "Amount", "In Progress", "Building", "Inputs"]
+            )  # (recipe_id, output_name, amount, profit_per_hour, building_name, inputs, status_name)
+            self._headers = [
+                "Recipe",
+                "Amount",
+                "Profit/hr",
+                "In Progress",
+                "Building",
+                "Inputs",
+            ]
 
         def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
             return len(self._data)
@@ -223,12 +232,23 @@ class BaseWindow(QWidget):
                     return self._data[row][1]
                 elif col == 1:  # Amount
                     return self._data[row][2]
-                elif col == 2:  # In progress
-                    return self._data[row][5]
-                elif col == 3:  # Building name
-                    return self._data[row][3]
-                elif col == 4:  # Inputs
+                elif col == 2:  # Profit/hr
+                    profit_per_hour = self._data[row][3]
+                    if profit_per_hour is not None:
+                        return f"{profit_per_hour:,.0f}"
+                    return "N/A"
+                elif col == 3:  # In progress
+                    return self._data[row][6]
+                elif col == 4:  # Building name
                     return self._data[row][4]
+                elif col == 5:  # Inputs
+                    return self._data[row][5]
+
+            elif role == Qt.ItemDataRole.UserRole:
+                if col == 2:  # Profit/hr - provide raw numeric value for delegate
+                    return self._data[row][3]
+                elif col == 1:  # Amount - provide raw numeric value for sorting
+                    return self._data[row][2]
 
             return None
 
@@ -243,14 +263,47 @@ class BaseWindow(QWidget):
                     return self._headers[section]
             return None
 
+        def sort(self, column: int, order: Qt.SortOrder = Qt.SortOrder.AscendingOrder):
+            """Sort table by given column and order."""
+            self.layoutAboutToBeChanged.emit()
+
+            reverse = order == Qt.SortOrder.DescendingOrder
+
+            if column == 0:  # Recipe name
+                self._data.sort(key=lambda x: x[1].lower(), reverse=reverse)
+            elif column == 1:  # Amount
+                self._data.sort(
+                    key=lambda x: (x[2] is None, x[2] if x[2] is not None else 0),
+                    reverse=reverse,
+                )
+            elif column == 2:  # Profit/hr
+                self._data.sort(
+                    key=lambda x: (
+                        x[3] is None,
+                        x[3] if x[3] is not None else float("-inf"),
+                    ),
+                    reverse=reverse,
+                )
+            elif column == 3:  # In Progress (status)
+                self._data.sort(key=lambda x: x[6].lower(), reverse=reverse)
+            elif column == 4:  # Building name
+                self._data.sort(key=lambda x: x[4].lower(), reverse=reverse)
+            elif column == 5:  # Inputs
+                self._data.sort(key=lambda x: x[5].lower(), reverse=reverse)
+
+            self.layoutChanged.emit()
+
         def set_recipes(
-            self, recipes: List[Tuple[Recipe, "BaseWindow.RecipeStatus", Optional[int]]]
+            self,
+            recipes: List[
+                Tuple[Recipe, "BaseWindow.RecipeStatus", Optional[int], Optional[float]]
+            ],
         ):
             """Populate the table with production orders."""
             self.beginResetModel()
             self._data.clear()
 
-            for recipe, status, amount in recipes:
+            for recipe, status, amount, profit_per_hour in recipes:
                 if recipe:
                     # Get output name
                     output_name = GameDataManager.get_item_name(recipe.output.id)
@@ -271,11 +324,21 @@ class BaseWindow(QWidget):
                             recipe.id,
                             output_name,
                             amount,
+                            profit_per_hour,
                             building_name,
                             inputs_str,
                             status.name.replace("_", " ").title(),
                         )
                     )
+
+            # Sort by Profit/hr (column 2) descending by default
+            self._data.sort(
+                key=lambda x: (
+                    x[3] is None,
+                    x[3] if x[3] is not None else float("-inf"),
+                ),
+                reverse=True,
+            )
 
             self.endResetModel()
 
@@ -285,6 +348,7 @@ class BaseWindow(QWidget):
             self.horizontalHeader().setSectionResizeMode(
                 QHeaderView.ResizeMode.ResizeToContents
             )
+            self.setSortingEnabled(True)
 
     update_tab_name_signal = Signal(int, str)
 
@@ -292,7 +356,7 @@ class BaseWindow(QWidget):
         super().__init__(parent)
 
         self.base_id = base_id
-        self.technology_levels: Dict[int, Technology] = (
+        self.technology_levels: Dict[int, int] = (
             {technology.id: technology.level for technology in company.technologies}
             if company
             else {}
@@ -310,6 +374,16 @@ class BaseWindow(QWidget):
         self.recipe_table_model = BaseWindow.RecipeTableModel(self)
         self.recipe_table_view = BaseWindow.RecipeTableView(self)
         self.recipe_table_view.setModel(self.recipe_table_model)
+
+        # Add gradient color delegate for profit_per_hour column
+        self.profit_delegate = GradientColorDelegate(self.recipe_table_view)
+        self.recipe_table_view.setItemDelegateForColumn(2, self.profit_delegate)
+
+        # Connect to model data changes to update delegate ranges
+        self.recipe_table_model.dataChanged.connect(self.update_delegate_ranges)
+        self.recipe_table_model.layoutChanged.connect(self.update_delegate_ranges)
+        self.recipe_table_model.modelReset.connect(self.update_delegate_ranges)
+
         splitter.addWidget(self.recipe_table_view)
 
         # Create Product table (right side)
@@ -350,7 +424,8 @@ class BaseWindow(QWidget):
         # Add ship warehouse arriving to destination
         for ship in self.ships:
             if (
-                ship.flight.dest_planet_id == base.planet_id
+                ship.flight is not None
+                and ship.flight.dest_planet_id == base.planet_id
                 and ship.flight.type == FlightType.NORMAL
                 and ship.warehouse is not None
             ):
@@ -373,24 +448,30 @@ class BaseWindow(QWidget):
                     - consumable.rate * DAYS_CONSUMABLE_BUFFER
                 )
 
-        # Remove materials with zero amounts
-        for mat_id in [
-            mat_id
-            for mat_id, amount in materials_dict.items()
-            if amount > -1 and amount < 1
-        ]:
-            materials_dict.pop(mat_id)
-
         recipes_dict: Dict[
-            int, Tuple[Recipe, BaseWindow.RecipeStatus, Optional[int]]
+            int, Tuple[Recipe, BaseWindow.RecipeStatus, Optional[int], Optional[float]]
         ] = (
             {}
-        )  # Dict of recipe_id to (Recipe, RecipeStatus, amount in progress / available)
+        )  # Dict of recipe_id to (Recipe, RecipeStatus, amount in progress / available, profit/hr)
         for order in base.production_orders:
+            recipe = GameDataManager.get_recipe_by_id(order.recipe_id)
+            result = calculate_profit_and_consumables(
+                recipe,
+                self.technology_levels.get(
+                    GameDataManager.get_building(recipe.producedIn).specialization,
+                    0,
+                ),
+            )
+            if result:
+                profit_per_hour, _, _ = result
+            else:
+                profit_per_hour = None
+
             recipes_dict[order.recipe_id] = (
-                GameDataManager.get_recipe_by_id(order.recipe_id),
+                recipe,
                 BaseWindow.RecipeStatus.IN_PROGRESS,
                 order.amount + recipes_dict.get(order.recipe_id, (None, None, 0))[2],
+                profit_per_hour,
             )
 
         recipes = list(recipes_dict.values())
@@ -408,6 +489,11 @@ class BaseWindow(QWidget):
         # Find potential recipes that we have materials for but are not currently producing (standby)
         for recipe in GameDataManager.get().recipes:
             if recipe.producedIn not in building_types:
+                continue
+            tech_level = self.technology_levels.get(
+                GameDataManager.get_building(recipe.producedIn).specialization, 0
+            )
+            if recipe.reqTech > tech_level:
                 continue
             potential_amount = math.inf
             for input_mat in recipe.inputs:
@@ -432,7 +518,52 @@ class BaseWindow(QWidget):
                 assert (
                     materials_dict[input_mat.id] >= 0
                 ), f"Material {input_mat.id} went negative for recipe {recipe.id} standby calculation."
-            recipes.append((recipe, BaseWindow.RecipeStatus.STANDBY, potential_amount))
+            result = calculate_profit_and_consumables(recipe, tech_level)
+            if result:
+                profit_per_hour, _, _ = result
+            else:
+                profit_per_hour = None
+            recipes.append(
+                (
+                    recipe,
+                    BaseWindow.RecipeStatus.STANDBY,
+                    potential_amount,
+                    profit_per_hour,
+                )
+            )
+
+        # Remove materials with zero amounts
+        for mat_id in [
+            mat_id
+            for mat_id, amount in materials_dict.items()
+            if amount > -1 and amount < 1
+        ]:
+            materials_dict.pop(mat_id)
+
+        # Add potential recipes
+        for recipe in GameDataManager.get().recipes:
+            if any(recipe.id == r[0].id for r in recipes):
+                continue
+            if recipe.producedIn not in building_types:
+                continue
+            tech_level = self.technology_levels.get(
+                GameDataManager.get_building(recipe.producedIn).specialization, 0
+            )
+            if recipe.reqTech > tech_level:
+                continue
+            result = calculate_profit_and_consumables(recipe, tech_level)
+            if result:
+                profit_per_hour, _, _ = result
+            else:
+                profit_per_hour = None
+            recipes.append(
+                (
+                    recipe,
+                    BaseWindow.RecipeStatus.NO_MATERIALS,
+                    np.nan,
+                    profit_per_hour,
+                )
+            )
 
         # Populate the RecipeTable with production orders
         self.recipe_table_model.set_recipes(recipes)
@@ -483,3 +614,33 @@ class BaseWindow(QWidget):
         production_time_hours = min(production_time_minutes.values()) / 60
         tab_name = f"{base.name} - {production_time_hours:.1f}h"
         self.update_tab_name_signal.emit(base.id, tab_name)
+
+    def update_delegate_ranges(self):
+        """Update the min/max ranges for gradient delegates based on all rows."""
+        profit_values = []
+
+        # Iterate through all rows in the model
+        for row in range(self.recipe_table_model.rowCount()):
+            # Get profit value (column 2 in display, position 3 in data tuple)
+            profit_val = self.recipe_table_model._data[row][3]
+            if (
+                profit_val is not None
+                and isinstance(profit_val, (int, float))
+                and math.isfinite(profit_val)
+            ):
+                profit_values.append(profit_val)
+
+        # Update profit delegate range
+        if profit_values:
+            profit_min = min(profit_values)
+            profit_max = max(profit_values)
+            if profit_max == profit_min:
+                profit_max = profit_min + 1.0
+        else:
+            profit_min = profit_max = 0.0
+
+        self.profit_delegate.set_value_range(profit_min, profit_max)
+
+        # Trigger a repaint of the affected columns
+        if self.recipe_table_model.rowCount() > 0:
+            self.recipe_table_view.viewport().update()

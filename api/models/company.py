@@ -164,7 +164,12 @@ class FlightType(IntEnum):
 
 class Flight(BaseModel):
     dest_planet_id: int = Field(alias="destPId")
+    start_date: str = Field(alias="sDate")
+    arrival_date: str = Field(alias="aDate")
+    start_fuel: float = Field(alias="startFuel")
+    arrival_fuel: float = Field(alias="arrivalFuel")
     type: FlightType
+    auto_unload: bool = Field(alias="aUnload")
 
 
 class Ship(BaseModel):
@@ -175,7 +180,7 @@ class Ship(BaseModel):
     fuel: float
     condition: float
     pId: int
-    flight: Flight
+    flight: Optional[Flight] = None
     warehouse: Optional[Warehouse] = None
 
 

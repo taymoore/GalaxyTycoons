@@ -365,7 +365,7 @@ def calculate_profit_and_consumables(
 
     Returns:
         None | tuple[float, tuple[int, ...], tuple[int, ...]]:
-            Returns a tuple containing the profit per hour, a tuple of preferred consumable IDs, and a tuple of rejected consumable IDs
+            Returns a tuple[profit per hour, tuple[preferred consumable IDs], tuple[rejected consumable IDs]
             if the calculation is successful. Returns None if the calculation cannot be performed.
     """
     try:
