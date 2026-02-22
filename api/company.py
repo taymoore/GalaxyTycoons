@@ -8,7 +8,7 @@ import requests
 from dotenv import load_dotenv
 from PySide6.QtCore import QObject, QSemaphore, Signal, Slot
 
-from api.models.company import Company, Base
+from api.models.company import Company, Base, Warehouse
 
 FETCH_COMPANY_TIMEOUT_SECONDS = 60 * 5  # 5 minutes
 
@@ -60,6 +60,12 @@ class CompanyDataManager(QObject):
                 "https://api.g2.galactictycoons.com/public/company", Company
             )
             if self.company:
+                for ship in self.company.ships:
+                    if ship.warehouse_id:
+                        ship.warehouse = self._fetch_with_retry(
+                            f"https://api.g2.galactictycoons.com/public/company/warehouse/{ship.warehouse_id}",
+                            Warehouse,
+                        )
                 self.fetch_company_timestamp = datetime.now()
                 _logger.info(f"Fetched company data at {self.fetch_company_timestamp}")
                 self.company_loaded.emit(self.company)
@@ -116,7 +122,6 @@ class CompanyDataManager(QObject):
 
             try:
                 response.raise_for_status()
-                print(response.text)
                 data = model_class.model_validate(response.json())
                 return data
             except Exception as exc:  # noqa: BLE001

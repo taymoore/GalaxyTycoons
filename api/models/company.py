@@ -155,6 +155,18 @@ class Base(BaseModel):
     warehouse: Optional[Warehouse] = None
 
 
+class FlightType(IntEnum):
+    NONE = 0
+    NORMAL = 1
+    EMERGENCY = 2
+    CANCELLED = 3
+
+
+class Flight(BaseModel):
+    dest_planet_id: int = Field(alias="destPId")
+    type: FlightType
+
+
 class Ship(BaseModel):
     id: int
     cId: int
@@ -163,6 +175,8 @@ class Ship(BaseModel):
     fuel: float
     condition: float
     pId: int
+    flight: Flight
+    warehouse: Optional[Warehouse] = None
 
 
 class Technology(BaseModel):

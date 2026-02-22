@@ -54,7 +54,14 @@ from PySide6.QtWidgets import (
 
 from api.exchange import Exchange
 from api.gameData import GameDataManager
-from api.models.company import Base, BuildingType, Company, ProductionOrder, Technology
+from api.models.company import (
+    Base,
+    BuildingType,
+    Company,
+    FlightType,
+    ProductionOrder,
+    Technology,
+)
 from api.models.exchange import Listing
 from api.models.gameData import Building, Recipe, Specialization, WorkerType
 from recipeWorker import RecipeWorker
@@ -290,6 +297,7 @@ class BaseWindow(QWidget):
             if company
             else {}
         )
+        self.ships = company.ships if company else []
 
         # Create main layout
         main_layout = QVBoxLayout(self)
@@ -324,6 +332,7 @@ class BaseWindow(QWidget):
         self.technology_levels = {
             technology.id: technology.level for technology in company.technologies
         }
+        self.ships = company.ships
 
     @Slot(Base)
     def handle_base_loaded(self, base: Base):
@@ -337,6 +346,16 @@ class BaseWindow(QWidget):
         materials_dict: Dict[int, int] = {
             mat.id: mat.amount for mat in base.warehouse.materials
         }
+
+        # Add ship warehouse arriving to destination
+        for ship in self.ships:
+            if (
+                ship.flight.dest_planet_id == base.planet_id
+                and ship.flight.type == FlightType.NORMAL
+                and ship.warehouse is not None
+            ):
+                for mat in ship.warehouse.materials:
+                    materials_dict[mat.id] = materials_dict.get(mat.id, 0) + mat.amount
 
         # Subtract active recipies consumables from warehouse materials
         for order in base.production_orders:
