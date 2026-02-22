@@ -593,6 +593,7 @@ class RecipeWindow(QWidget):
                 "Recipe Output",
                 "$ / hr",
                 "Vel.",
+                "Price Δ",
                 "Value",
                 "Tech Req.",
                 "Building",
@@ -632,8 +633,10 @@ class RecipeWindow(QWidget):
             column = index.column()
             data = self.table_data[row][column]
             if role == Qt.ItemDataRole.DisplayRole:
-                if column == 1 or column == 2 or column == 3:
+                if column == 1 or column == 2 or column == 4:  # $ / hr, Vel., Value
                     data = "{:,.2f}".format(data) if data != -1 else ""
+                elif column == 3:  # Price Δ - format with + sign for positive values
+                    data = "{:+,.2f}".format(data) if data != 0 else "0.00"
                 return data
             elif role == Qt.ItemDataRole.UserRole:
                 return data
@@ -656,6 +659,14 @@ class RecipeWindow(QWidget):
                 else 0.0
             )
             row.append(quantity_sold_per_hour)
+            
+            # Calculate price delta (current_price - average_price)
+            listing = Exchange.get_listing(recipe.output.id)
+            price_delta = (
+                (listing.current_price - listing.average_price) / 100 if listing else 0.0
+            )
+            row.append(price_delta)
+            
             row.append(0.0)  # Value column, will be updated later
             row.append(
                 f"{GameDataManager.get_building(recipe.producedIn).specialization.name} {recipe.reqTech}"
@@ -694,19 +705,19 @@ class RecipeWindow(QWidget):
             consumable_rejected: tuple[int, ...],
         ) -> None:
             """Update consumables data and text for a specific row."""
-            self.table_data[row][6] = format_consumables(
+            self.table_data[row][7] = format_consumables(
                 consumable_preferred, consumable_rejected
             )
             self.consumables_data[row] = (consumable_preferred, consumable_rejected)
 
             # Emit dataChanged for the consumables column
-            consumables_index = self.index(row, 6)
+            consumables_index = self.index(row, 7)
             self.dataChanged.emit(consumables_index, consumables_index)
 
         def update_value(self, row: int, value: float) -> None:
             """Update the value column for a specific row."""
-            self.table_data[row][3] = value
-            value_index = self.index(row, 3)
+            self.table_data[row][4] = value
+            value_index = self.index(row, 4)
             self.dataChanged.emit(value_index, value_index)
 
         def update_values_batch(self, values_dict: dict) -> None:
@@ -720,13 +731,13 @@ class RecipeWindow(QWidget):
 
             # Update all values in the dictionary
             for row, value in values_dict.items():
-                self.table_data[row][3] = value
+                self.table_data[row][4] = value
 
             # Emit a single dataChanged signal for the entire range
             if values_dict:
                 first_row = min(values_dict.keys())
                 last_row = max(values_dict.keys())
-                self.dataChanged.emit(self.index(first_row, 3), self.index(last_row, 3))
+                self.dataChanged.emit(self.index(first_row, 4), self.index(last_row, 4))
 
         def update_min_max_values(self) -> None:
             """Update min/max values for profit and quantity columns for gradient coloring."""
@@ -833,8 +844,8 @@ class RecipeWindow(QWidget):
             self.tech_level_modifier: int = 0
 
         def lessThan(self, source_left: QModelIndex, source_right: QModelIndex) -> bool:
-            # Numeric sorting for columns 1 (Profit/hr), 2 (Quantity Sold), and 3 (Value)
-            if source_left.column() in (1, 2, 3):
+            # Numeric sorting for columns 1 (Profit/hr), 2 (Quantity Sold), 3 (Price Δ), and 4 (Value)
+            if source_left.column() in (1, 2, 3, 4):
                 left = self.sourceModel().data(source_left, Qt.ItemDataRole.UserRole)
                 right = self.sourceModel().data(source_right, Qt.ItemDataRole.UserRole)
                 # Handle -1 values (invalid/missing data)
@@ -1107,7 +1118,7 @@ class RecipeWindow(QWidget):
 
         # Apply custom delegate to consumables column
         consumables_delegate = ConsumablesDelegate(self)
-        self.recipe_table_view.setItemDelegateForColumn(6, consumables_delegate)
+        self.recipe_table_view.setItemDelegateForColumn(7, consumables_delegate)
 
         # Apply gradient color delegates to profit and quantity columns
         self.profit_delegate = GradientColorDelegate(self)
@@ -1115,16 +1126,20 @@ class RecipeWindow(QWidget):
         self.quantity_delegate = GradientColorDelegate(
             self, value_transform=lambda x: math.log1p(x) * QUANTITY_SOLD_SCALING_FACTOR
         )
+        # Price delta delegate (no transformation needed)
+        self.price_delta_delegate = GradientColorDelegate(self)
+        
         self.recipe_table_view.setItemDelegateForColumn(1, self.profit_delegate)
         self.recipe_table_view.setItemDelegateForColumn(2, self.quantity_delegate)
+        self.recipe_table_view.setItemDelegateForColumn(3, self.price_delta_delegate)
 
         # Apply specialization color delegate to tech requirement column
         self.specialization_delegate = SpecializationColorDelegate(self)
-        self.recipe_table_view.setItemDelegateForColumn(4, self.specialization_delegate)
+        self.recipe_table_view.setItemDelegateForColumn(5, self.specialization_delegate)
 
         # Apply building color delegate to building column
         self.building_delegate = BuildingColorDelegate(self)
-        self.recipe_table_view.setItemDelegateForColumn(5, self.building_delegate)
+        self.recipe_table_view.setItemDelegateForColumn(6, self.building_delegate)
 
         # Connect to model data changes to update delegate ranges
         self.recipe_table_model.dataChanged.connect(self.update_delegate_ranges)
@@ -1142,7 +1157,13 @@ class RecipeWindow(QWidget):
         )
         self.toolbox.valueWeightChanged.connect(self.handle_value_weight_change)
         self.recipe_table_view.setModel(self.recipe_table_proxy_model)
-        self.recipe_table_proxy_model.sort(3, Qt.SortOrder.DescendingOrder)
+        self.recipe_table_proxy_model.sort(4, Qt.SortOrder.DescendingOrder)  # Sort by Value column
+        
+        # Hide the Value column (column 4) - keep for sorting but don't display
+        self.recipe_table_view.setColumnHidden(4, True)
+        HIDE_CONSUMABLES = True
+        if HIDE_CONSUMABLES:
+            self.recipe_table_view.setColumnHidden(7, True)
 
         splitter.addWidget(self.recipe_table_view)
 
@@ -1190,6 +1211,7 @@ class RecipeWindow(QWidget):
         # Calculate ranges from visible rows in the proxy model
         profit_values = []
         quantity_values = []
+        price_delta_values = []
 
         # Iterate through all rows in the proxy model (only visible rows)
         for proxy_row in range(self.recipe_table_proxy_model.rowCount()):
@@ -1209,6 +1231,11 @@ class RecipeWindow(QWidget):
                 quantity_values.append(
                     math.log1p(quantity_val) * QUANTITY_SOLD_SCALING_FACTOR
                 )
+
+            # Get price delta value (column 3)
+            price_delta_val = self.recipe_table_model.table_data[source_row][3]
+            if isinstance(price_delta_val, (int, float)) and math.isfinite(price_delta_val):
+                price_delta_values.append(price_delta_val)
 
         # Update profit delegate range
         if profit_values:
@@ -1231,6 +1258,16 @@ class RecipeWindow(QWidget):
             quantity_min = quantity_max = 0.0
 
         self.quantity_delegate.set_value_range(quantity_min, quantity_max)
+
+        # Update price delta delegate range - centered around 0 like in baseUi.py
+        if price_delta_values:
+            price_delta_min = min(price_delta_values)
+            price_delta_max = max(price_delta_values)
+            # Ensure range is centered around 0 for proper red/green gradient
+            abs_max = max(abs(price_delta_min), abs(price_delta_max))
+            self.price_delta_delegate.set_value_range(-abs_max, abs_max)
+        else:
+            self.price_delta_delegate.set_value_range(0.0, 0.0)
 
         # Trigger a repaint of the affected columns
         if self.recipe_table_model.rowCount() > 0:
@@ -1423,6 +1460,17 @@ class RecipeWindow(QWidget):
                 self.recipe_table_model.setData(
                     self.recipe_table_model.index(row, 2),
                     quantity_sold_daily,
+                    Qt.ItemDataRole.EditRole,
+                )
+
+                # Update price delta
+                listing = Exchange.get_listing(recipe.output.id)
+                price_delta = (
+                    (listing.current_price - listing.average_price) / 100 if listing else 0.0
+                )
+                self.recipe_table_model.setData(
+                    self.recipe_table_model.index(row, 3),
+                    price_delta,
                     Qt.ItemDataRole.EditRole,
                 )
 

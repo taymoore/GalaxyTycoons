@@ -116,6 +116,7 @@ class CompanyDataManager(QObject):
 
             try:
                 response.raise_for_status()
+                print(response.text)
                 data = model_class.model_validate(response.json())
                 return data
             except Exception as exc:  # noqa: BLE001

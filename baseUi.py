@@ -281,9 +281,10 @@ class BaseWindow(QWidget):
 
     update_tab_name_signal = Signal(int, str)
 
-    def __init__(self, parent: QWidget, company: Company | None = None):
+    def __init__(self, parent: QWidget, base_id: int, company: Company | None = None):
         super().__init__(parent)
 
+        self.base_id = base_id
         self.technology_levels: Dict[int, Technology] = (
             {technology.id: technology.level for technology in company.technologies}
             if company
@@ -326,6 +327,9 @@ class BaseWindow(QWidget):
 
     @Slot(Base)
     def handle_base_loaded(self, base: Base):
+        if base.id != self.base_id:
+            return
+
         if base.warehouse is None:
             _logger.warning(f"Base {base.name} has no warehouse data.")
             return
@@ -357,11 +361,6 @@ class BaseWindow(QWidget):
             if amount > -1 and amount < 1
         ]:
             materials_dict.pop(mat_id)
-
-        # Populate the ProductTable with materials
-        self.product_table_model.set_materials(
-            materials_dict, self.price_delta_delegate
-        )
 
         recipes_dict: Dict[
             int, Tuple[Recipe, BaseWindow.RecipeStatus, Optional[int]]
@@ -418,6 +417,11 @@ class BaseWindow(QWidget):
 
         # Populate the RecipeTable with production orders
         self.recipe_table_model.set_recipes(recipes)
+
+        # Populate the ProductTable with materials
+        self.product_table_model.set_materials(
+            materials_dict, self.price_delta_delegate
+        )
 
         # Calculate production time
         production_time_minutes: Dict[int, float] = (

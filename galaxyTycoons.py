@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
     def handle_base_loaded(self, base: Base) -> None:
         if base.id not in self.base_uis.keys():
             self.base_uis[base.id] = BaseWindow(
-                self, self.company_data_manager.fetch_company()
+                self, base.id, self.company_data_manager.fetch_company()
             )
             self.tabs.addTab(self.base_uis[base.id], base.name)
             self.company_data_manager.base_loaded.connect(
