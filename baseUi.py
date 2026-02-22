@@ -71,6 +71,7 @@ from utils import (
     ConsumablesDelegate,
     GradientColorDelegate,
     SpecializationColorDelegate,
+    StatusColorDelegate,
     align_add,
     calculate_profit_and_consumables,
     format_consumables,
@@ -378,6 +379,14 @@ class BaseWindow(QWidget):
         # Add gradient color delegate for profit_per_hour column
         self.profit_delegate = GradientColorDelegate(self.recipe_table_view)
         self.recipe_table_view.setItemDelegateForColumn(2, self.profit_delegate)
+
+        # Apply status color delegate to "In Progress" column
+        self.status_delegate = StatusColorDelegate(self.recipe_table_view)
+        self.recipe_table_view.setItemDelegateForColumn(3, self.status_delegate)
+
+        # Apply building color delegate to building column
+        self.building_delegate = BuildingColorDelegate(self.recipe_table_view)
+        self.recipe_table_view.setItemDelegateForColumn(4, self.building_delegate)
 
         # Connect to model data changes to update delegate ranges
         self.recipe_table_model.dataChanged.connect(self.update_delegate_ranges)

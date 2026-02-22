@@ -231,6 +231,50 @@ class BuildingColorDelegate(QStyledItemDelegate):
         super().paint(painter, option, index)
 
 
+class StatusColorDelegate(QStyledItemDelegate):
+    """Custom delegate that renders cells with background colors based on status text."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Define status colors
+        self.status_colors = {
+            "IN PROGRESS": QColor(0, 200, 0),      # Green
+            "STANDBY": QColor(255, 165, 0),        # Orange
+            "NO MATERIALS": QColor(255, 0, 0),     # Red
+        }
+
+    def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
+        """Paint the cell with background color based on status text."""
+        # Get the text which contains the status
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        if not text:
+            return super().paint(painter, option, index)
+
+        # Get status text (normalize to uppercase for comparison)
+        status_text = str(text).upper()
+        
+        # Find matching color
+        color = None
+        for status_key, status_color in self.status_colors.items():
+            if status_key in status_text:
+                color = status_color
+                break
+        
+        if color is None:
+            return super().paint(painter, option, index)
+
+        # Initialize style option
+        self.initStyleOption(option, index)
+
+        # Draw the background with the status color
+        painter.save()
+        painter.fillRect(option.rect, color)
+        painter.restore()
+
+        # Draw the text using the default delegate
+        super().paint(painter, option, index)
+
+
 class SpecializationColorDelegate(QStyledItemDelegate):
     """Custom delegate that renders cells with unique background colors for each specialization using a colormap."""
 
