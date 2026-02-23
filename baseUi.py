@@ -182,6 +182,9 @@ class BaseWindow(QWidget):
             self._data.clear()
 
             for material_id, amount in materials_dict.items():
+                # Skip materials with zero or negative amounts
+                if amount <= 0:
+                    continue
                 material = GameDataManager.get_material_by_id(material_id)
                 if material is None:
                     _logger.warning(
@@ -227,24 +230,13 @@ class BaseWindow(QWidget):
     class RecipeTableModel(QAbstractTableModel):
 
         class RecipeTableItem(BaseModel):
-            model_config = {"arbitrary_types_allowed": True}
-
             recipe_id: int
-            output_name: str
+            output_name: Optional[str] = None
             amount: Optional[int]
-            profit_per_hour: Optional[float]
-            building_name: str
-            inputs: str
+            profit_per_hour: Optional[float] = None
+            building_name: Optional[str] = None
+            inputs: Optional[str] = None
             status: "BaseWindow.RecipeStatus"
-
-            @field_validator("amount", "profit_per_hour", mode="before")
-            @classmethod
-            def allow_nan(cls, v):
-                import math
-
-                if isinstance(v, float) and math.isnan(v):
-                    return None
-                return v
 
         def __init__(self, parent: QWidget):
             super().__init__(parent)
@@ -345,42 +337,47 @@ class BaseWindow(QWidget):
             self.layoutChanged.emit()
 
         def set_recipes(
-            self,
-            recipes: List[
-                Tuple[Recipe, "BaseWindow.RecipeStatus", Optional[int], Optional[float]]
-            ],
+            self, recipes: List[RecipeTableItem], technology_levels: Dict[int, int]
         ):
             """Populate the table with production orders."""
             self.beginResetModel()
             self._data.clear()
 
-            for recipe, status, amount, profit_per_hour in recipes:
-                if recipe:
-                    # Get output name
-                    output_name = GameDataManager.get_item_name(recipe.output.id)
+            for recipe_item in recipes:
+                recipe = GameDataManager.get_recipe_by_id(recipe_item.recipe_id)
 
-                    # Get building name
+                if recipe is None:
+                    _logger.warning(
+                        f"Recipe with ID {recipe_item.recipe_id} not found in game data, skipping."
+                    )
+                    continue
+
+                if recipe_item.output_name is None:
+                    recipe_item.output_name = GameDataManager.get_item_name(
+                        recipe.output.id
+                    )
+
+                if recipe_item.building_name is None:
                     building = GameDataManager.get_building(recipe.producedIn)
-                    building_name = building.name if building else "Unknown"
+                    recipe_item.building_name = building.name if building else "Unknown"
 
-                    # Format inputs
+                if recipe_item.profit_per_hour is None:
+                    result = calculate_profit_and_consumables(
+                        recipe, technology_levels.get(building.specialization, 0)
+                    )
+                    if result is not None:
+                        recipe_item.profit_per_hour, _, _ = result
+                    else:
+                        recipe_item.profit_per_hour = None
+
+                if recipe_item.inputs is None:
                     inputs_list = []
                     for input_mat in recipe.inputs:
                         mat_name = GameDataManager.get_item_name(input_mat.id)
                         inputs_list.append(f"{mat_name} x{input_mat.am}")
-                    inputs_str = ", ".join(inputs_list)
+                    recipe_item.inputs = ", ".join(inputs_list)
 
-                    self._data.append(
-                        self.RecipeTableItem(
-                            recipe_id=recipe.id,
-                            output_name=output_name,
-                            amount=amount,
-                            profit_per_hour=profit_per_hour,
-                            building_name=building_name,
-                            inputs=inputs_str,
-                            status=status,
-                        )
-                    )
+                self._data.append(recipe_item)
 
             # Sort by Profit/hr (column 2) descending by default
             self._data.sort(
@@ -511,30 +508,18 @@ class BaseWindow(QWidget):
                     - consumable.rate * DAYS_CONSUMABLE_BUFFER
                 )
 
-        recipes_dict: Dict[
-            int, Tuple[Recipe, BaseWindow.RecipeStatus, Optional[int], Optional[float]]
-        ] = (
-            {}
-        )  # Dict of recipe_id to (Recipe, RecipeStatus, amount in progress / available, profit/hr)
+        recipes_dict: Dict[int, BaseWindow.RecipeTableModel.RecipeTableItem] = {}
         for order in base.production_orders:
             recipe = GameDataManager.get_recipe_by_id(order.recipe_id)
-            result = calculate_profit_and_consumables(
-                recipe,
-                self.technology_levels.get(
-                    GameDataManager.get_building(recipe.producedIn).specialization,
-                    0,
-                ),
+            amount = (
+                order.amount + recipes_dict[order.recipe_id].amount
+                if order.recipe_id in recipes_dict
+                else order.amount
             )
-            if result:
-                profit_per_hour, _, _ = result
-            else:
-                profit_per_hour = None
-
-            recipes_dict[order.recipe_id] = (
-                recipe,
-                BaseWindow.RecipeStatus.IN_PROGRESS,
-                order.amount + recipes_dict.get(order.recipe_id, (None, None, 0))[2],
-                profit_per_hour,
+            recipes_dict[order.recipe_id] = BaseWindow.RecipeTableModel.RecipeTableItem(
+                recipe_id=order.recipe_id,
+                status=BaseWindow.RecipeStatus.IN_PROGRESS,
+                amount=amount,
             )
 
         recipes = list(recipes_dict.values())
@@ -581,17 +566,11 @@ class BaseWindow(QWidget):
                 assert (
                     materials_dict[input_mat.id] >= 0
                 ), f"Material {input_mat.id} went negative for recipe {recipe.id} standby calculation."
-            result = calculate_profit_and_consumables(recipe, tech_level)
-            if result:
-                profit_per_hour, _, _ = result
-            else:
-                profit_per_hour = None
             recipes.append(
-                (
-                    recipe,
-                    BaseWindow.RecipeStatus.STANDBY,
-                    potential_amount,
-                    profit_per_hour,
+                BaseWindow.RecipeTableModel.RecipeTableItem(
+                    recipe_id=recipe.id,
+                    status=BaseWindow.RecipeStatus.STANDBY,
+                    amount=potential_amount,
                 )
             )
 
@@ -605,7 +584,8 @@ class BaseWindow(QWidget):
 
         # Add potential recipes
         for recipe in GameDataManager.get().recipes:
-            if any(recipe.id == r[0].id for r in recipes):
+            # Skip recipes already added
+            if any(recipe.id == r.recipe_id for r in recipes):
                 continue
             if recipe.producedIn not in building_types:
                 continue
@@ -614,22 +594,16 @@ class BaseWindow(QWidget):
             )
             if recipe.reqTech > tech_level:
                 continue
-            result = calculate_profit_and_consumables(recipe, tech_level)
-            if result:
-                profit_per_hour, _, _ = result
-            else:
-                profit_per_hour = None
             recipes.append(
-                (
-                    recipe,
-                    BaseWindow.RecipeStatus.NO_MATERIALS,
-                    np.nan,
-                    profit_per_hour,
+                BaseWindow.RecipeTableModel.RecipeTableItem(
+                    recipe_id=recipe.id,
+                    status=BaseWindow.RecipeStatus.NO_MATERIALS,
+                    amount=None,
                 )
             )
 
         # Populate the RecipeTable with production orders
-        self.recipe_table_model.set_recipes(recipes)
+        self.recipe_table_model.set_recipes(recipes, self.technology_levels)
 
         # Populate the ProductTable with materials
         self.product_table_model.set_materials(
