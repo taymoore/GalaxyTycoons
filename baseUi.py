@@ -237,12 +237,16 @@ class BaseWindow(QWidget):
             building_name: Optional[str] = None
             inputs: Optional[str] = None
             status: "BaseWindow.RecipeStatus"
+            duration: Optional[float] = (
+                None  # Duration in hours, calculated from recipe time and building speed
+            )
 
         def __init__(self, parent: QWidget):
             super().__init__(parent)
             self._data: List[BaseWindow.RecipeTableModel.RecipeTableItem] = []
             self._headers = [
                 "Recipe",
+                "Duration",
                 "Amount",
                 "Profit/hr",
                 "In Progress",
@@ -266,25 +270,49 @@ class BaseWindow(QWidget):
             if role == Qt.ItemDataRole.DisplayRole:
                 if col == 0:  # Recipe name (output)
                     return self._data[row].output_name
-                elif col == 1:  # Amount
+                elif col == 1:  # Duration
+                    return (
+                        f"{self._data[row].duration:.2f}h"
+                        if self._data[row].duration
+                        else "N/A"
+                    )
+                elif col == 2:  # Amount
                     return self._data[row].amount
-                elif col == 2:  # Profit/hr
+                elif col == 3:  # Profit/hr
                     profit_per_hour = self._data[row].profit_per_hour
                     if profit_per_hour is not None:
                         return f"{profit_per_hour:,.0f}"
                     return "N/A"
-                elif col == 3:  # In progress
+                elif col == 4:  # In progress
                     return self._data[row].status.name.replace("_", " ").title()
-                elif col == 4:  # Building name
+                elif col == 5:  # Building name
                     return self._data[row].building_name
-                elif col == 5:  # Inputs
+                elif col == 6:  # Inputs
                     return self._data[row].inputs
 
             elif role == Qt.ItemDataRole.UserRole:
-                if col == 2:  # Profit/hr - provide raw numeric value for delegate
-                    return self._data[row].profit_per_hour
-                elif col == 1:  # Amount - provide raw numeric value for sorting
+                if col == 0:  # Recipe name - provide output name for sorting
+                    return (
+                        self._data[row].output_name.lower()
+                        if self._data[row].output_name
+                        else ""
+                    )
+                elif col == 1:  # Duration - provide raw numeric value for sorting
+                    return (
+                        self._data[row].duration
+                        if self._data[row].duration is not None
+                        else float("inf")
+                    )
+                elif col == 2:  # Amount - provide raw numeric value for sorting
                     return self._data[row].amount
+                elif col == 3:  # Profit/hr - provide raw numeric value for delegate
+                    return self._data[row].profit_per_hour
+                elif col == 4:
+                    return self._data[row].status.value
+                elif col == 5:
+                    return self._data[row].building_name
+                elif col == 6:
+                    return self._data[row].inputs
 
             return None
 
@@ -307,7 +335,15 @@ class BaseWindow(QWidget):
 
             if column == 0:  # Recipe name
                 self._data.sort(key=lambda x: x.output_name.lower(), reverse=reverse)
-            elif column == 1:  # Amount
+            elif column == 1:  # Duration
+                self._data.sort(
+                    key=lambda x: (
+                        x.duration is None,
+                        x.duration if x.duration is not None else float("inf"),
+                    ),
+                    reverse=reverse,
+                )
+            elif column == 2:  # Amount
                 self._data.sort(
                     key=lambda x: (
                         x.amount is None,
@@ -315,7 +351,7 @@ class BaseWindow(QWidget):
                     ),
                     reverse=reverse,
                 )
-            elif column == 2:  # Profit/hr
+            elif column == 3:  # Profit/hr
                 self._data.sort(
                     key=lambda x: (
                         x.profit_per_hour is None,
@@ -327,17 +363,20 @@ class BaseWindow(QWidget):
                     ),
                     reverse=reverse,
                 )
-            elif column == 3:  # In Progress (status)
+            elif column == 4:  # In Progress (status)
                 self._data.sort(key=lambda x: x.status.lower(), reverse=reverse)
-            elif column == 4:  # Building name
+            elif column == 5:  # Building name
                 self._data.sort(key=lambda x: x.building_name.lower(), reverse=reverse)
-            elif column == 5:  # Inputs
+            elif column == 6:  # Inputs
                 self._data.sort(key=lambda x: x.inputs.lower(), reverse=reverse)
 
             self.layoutChanged.emit()
 
         def set_recipes(
-            self, recipes: List[RecipeTableItem], technology_levels: Dict[int, int]
+            self,
+            recipes: List[RecipeTableItem],
+            technology_levels: Dict[int, int],
+            building_count: Dict[int, int],
         ):
             """Populate the table with production orders."""
             self.beginResetModel()
@@ -351,20 +390,35 @@ class BaseWindow(QWidget):
                         f"Recipe with ID {recipe_item.recipe_id} not found in game data, skipping."
                     )
                     continue
+                building = GameDataManager.get_building(recipe.producedIn)
+                if building is None:
+                    _logger.warning(
+                        f"Building with ID {recipe.producedIn} not found in game data for recipe {GameDataManager.get_item_name(recipe.output.id)} [{recipe.id}], skipping."
+                    )
+                    continue
+                tech_level = technology_levels.get(building.specialization, 0)
 
                 if recipe_item.output_name is None:
                     recipe_item.output_name = GameDataManager.get_item_name(
                         recipe.output.id
                     )
 
+                if recipe_item.duration is None and recipe_item.amount is not None:
+                    recipe_item.duration = (
+                        recipe.timeMinutes
+                        * recipe_item.amount
+                        / (
+                            (1 + 0.05 * tech_level)
+                            * 60
+                            * building_count[recipe.producedIn]
+                        )
+                    )
+
                 if recipe_item.building_name is None:
-                    building = GameDataManager.get_building(recipe.producedIn)
                     recipe_item.building_name = building.name if building else "Unknown"
 
                 if recipe_item.profit_per_hour is None:
-                    result = calculate_profit_and_consumables(
-                        recipe, technology_levels.get(building.specialization, 0)
-                    )
+                    result = calculate_profit_and_consumables(recipe, tech_level)
                     if result is not None:
                         recipe_item.profit_per_hour, _, _ = result
                     else:
@@ -429,15 +483,15 @@ class BaseWindow(QWidget):
 
         # Add gradient color delegate for profit_per_hour column
         self.profit_delegate = GradientColorDelegate(self.recipe_table_view)
-        self.recipe_table_view.setItemDelegateForColumn(2, self.profit_delegate)
+        self.recipe_table_view.setItemDelegateForColumn(3, self.profit_delegate)
 
         # Apply status color delegate to "In Progress" column
         self.status_delegate = StatusColorDelegate(self.recipe_table_view)
-        self.recipe_table_view.setItemDelegateForColumn(3, self.status_delegate)
+        self.recipe_table_view.setItemDelegateForColumn(4, self.status_delegate)
 
         # Apply building color delegate to building column
         self.building_delegate = BuildingColorDelegate(self.recipe_table_view)
-        self.recipe_table_view.setItemDelegateForColumn(4, self.building_delegate)
+        self.recipe_table_view.setItemDelegateForColumn(5, self.building_delegate)
 
         # Connect to model data changes to update delegate ranges
         self.recipe_table_model.dataChanged.connect(self.update_delegate_ranges)
@@ -583,6 +637,7 @@ class BaseWindow(QWidget):
             materials_dict.pop(mat_id)
 
         # Add potential recipes
+        # TODO: Sort by most profitable to least profitable potential recipes instead of just adding in game data order
         for recipe in GameDataManager.get().recipes:
             # Skip recipes already added
             if any(recipe.id == r.recipe_id for r in recipes):
@@ -603,7 +658,9 @@ class BaseWindow(QWidget):
             )
 
         # Populate the RecipeTable with production orders
-        self.recipe_table_model.set_recipes(recipes, self.technology_levels)
+        self.recipe_table_model.set_recipes(
+            recipes, self.technology_levels, building_types
+        )
 
         # Populate the ProductTable with materials
         self.product_table_model.set_materials(
