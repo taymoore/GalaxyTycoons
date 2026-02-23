@@ -8,7 +8,7 @@ import matplotlib.colors as mcolors
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from PySide6.QtCore import (
     QAbstractTableModel,
     QModelIndex,
@@ -225,13 +225,30 @@ class BaseWindow(QWidget):
             self.setSortingEnabled(True)
 
     class RecipeTableModel(QAbstractTableModel):
+
+        class RecipeTableItem(BaseModel):
+            model_config = {"arbitrary_types_allowed": True}
+
+            recipe_id: int
+            output_name: str
+            amount: Optional[int]
+            profit_per_hour: Optional[float]
+            building_name: str
+            inputs: str
+            status: "BaseWindow.RecipeStatus"
+
+            @field_validator("amount", "profit_per_hour", mode="before")
+            @classmethod
+            def allow_nan(cls, v):
+                import math
+
+                if isinstance(v, float) and math.isnan(v):
+                    return None
+                return v
+
         def __init__(self, parent: QWidget):
             super().__init__(parent)
-            self._data: List[
-                tuple[int, str, Optional[int], Optional[float], str, str, str]
-            ] = (
-                []
-            )  # (recipe_id, output_name, amount, profit_per_hour, building_name, inputs, status_name)
+            self._data: List[BaseWindow.RecipeTableModel.RecipeTableItem] = []
             self._headers = [
                 "Recipe",
                 "Amount",
@@ -256,26 +273,26 @@ class BaseWindow(QWidget):
 
             if role == Qt.ItemDataRole.DisplayRole:
                 if col == 0:  # Recipe name (output)
-                    return self._data[row][1]
+                    return self._data[row].output_name
                 elif col == 1:  # Amount
-                    return self._data[row][2]
+                    return self._data[row].amount
                 elif col == 2:  # Profit/hr
-                    profit_per_hour = self._data[row][3]
+                    profit_per_hour = self._data[row].profit_per_hour
                     if profit_per_hour is not None:
                         return f"{profit_per_hour:,.0f}"
                     return "N/A"
                 elif col == 3:  # In progress
-                    return self._data[row][6]
+                    return self._data[row].status.name.replace("_", " ").title()
                 elif col == 4:  # Building name
-                    return self._data[row][4]
+                    return self._data[row].building_name
                 elif col == 5:  # Inputs
-                    return self._data[row][5]
+                    return self._data[row].inputs
 
             elif role == Qt.ItemDataRole.UserRole:
                 if col == 2:  # Profit/hr - provide raw numeric value for delegate
-                    return self._data[row][3]
+                    return self._data[row].profit_per_hour
                 elif col == 1:  # Amount - provide raw numeric value for sorting
-                    return self._data[row][2]
+                    return self._data[row].amount
 
             return None
 
@@ -297,26 +314,33 @@ class BaseWindow(QWidget):
             reverse = order == Qt.SortOrder.DescendingOrder
 
             if column == 0:  # Recipe name
-                self._data.sort(key=lambda x: x[1].lower(), reverse=reverse)
+                self._data.sort(key=lambda x: x.output_name.lower(), reverse=reverse)
             elif column == 1:  # Amount
                 self._data.sort(
-                    key=lambda x: (x[2] is None, x[2] if x[2] is not None else 0),
+                    key=lambda x: (
+                        x.amount is None,
+                        x.amount if x.amount is not None else 0,
+                    ),
                     reverse=reverse,
                 )
             elif column == 2:  # Profit/hr
                 self._data.sort(
                     key=lambda x: (
-                        x[3] is None,
-                        x[3] if x[3] is not None else float("-inf"),
+                        x.profit_per_hour is None,
+                        (
+                            x.profit_per_hour
+                            if x.profit_per_hour is not None
+                            else float("-inf")
+                        ),
                     ),
                     reverse=reverse,
                 )
             elif column == 3:  # In Progress (status)
-                self._data.sort(key=lambda x: x[6].lower(), reverse=reverse)
+                self._data.sort(key=lambda x: x.status.lower(), reverse=reverse)
             elif column == 4:  # Building name
-                self._data.sort(key=lambda x: x[4].lower(), reverse=reverse)
+                self._data.sort(key=lambda x: x.building_name.lower(), reverse=reverse)
             elif column == 5:  # Inputs
-                self._data.sort(key=lambda x: x[5].lower(), reverse=reverse)
+                self._data.sort(key=lambda x: x.inputs.lower(), reverse=reverse)
 
             self.layoutChanged.emit()
 
@@ -347,22 +371,26 @@ class BaseWindow(QWidget):
                     inputs_str = ", ".join(inputs_list)
 
                     self._data.append(
-                        (
-                            recipe.id,
-                            output_name,
-                            amount,
-                            profit_per_hour,
-                            building_name,
-                            inputs_str,
-                            status.name.replace("_", " ").title(),
+                        self.RecipeTableItem(
+                            recipe_id=recipe.id,
+                            output_name=output_name,
+                            amount=amount,
+                            profit_per_hour=profit_per_hour,
+                            building_name=building_name,
+                            inputs=inputs_str,
+                            status=status,
                         )
                     )
 
             # Sort by Profit/hr (column 2) descending by default
             self._data.sort(
                 key=lambda x: (
-                    x[3] is None,
-                    x[3] if x[3] is not None else float("-inf"),
+                    x.profit_per_hour is None,
+                    (
+                        x.profit_per_hour
+                        if x.profit_per_hour is not None
+                        else float("-inf")
+                    ),
                 ),
                 reverse=True,
             )
@@ -657,7 +685,7 @@ class BaseWindow(QWidget):
         # Iterate through all rows in the model
         for row in range(self.recipe_table_model.rowCount()):
             # Get profit value (column 2 in display, position 3 in data tuple)
-            profit_val = self.recipe_table_model._data[row][3]
+            profit_val = self.recipe_table_model._data[row].profit_per_hour
             if (
                 profit_val is not None
                 and isinstance(profit_val, (int, float))
