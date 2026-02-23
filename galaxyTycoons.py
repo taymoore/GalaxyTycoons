@@ -91,6 +91,10 @@ class MainWindow(QMainWindow):
         exchange_instance.exchange_updated_signal.connect(
             self.investments_tab.handle_exchange_updated
         )
+        # When exchange data is updated, we may need to refresh company data
+        exchange_instance.exchange_updated_signal.connect(
+            self.company_data_manager.fetch_company
+        )
         # Tech Slider change should refresh investments
         self.recipe_tab.toolbox.techSliderChanged.connect(
             self.investments_tab.handle_tech_slider_changed
@@ -108,7 +112,6 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def handle_tab_change(self, index: int) -> None:
         if index >= self.tabs.indexOf(self.configuration_tab):
-            _logger.debug("Emitting fetch_company_signal due to tab change.")
             self.fetch_company_signal.emit()
 
     @Slot(Base)

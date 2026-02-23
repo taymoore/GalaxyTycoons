@@ -40,6 +40,7 @@ class CompanyDataManager(QObject):
         self._wake_semaphore = QSemaphore(0)
         self.base_dict: Dict[int, Base] = {}
         self.fetch_company_timestamp: Optional[datetime] = None
+        self.fetch_base_timestamp: Dict[int, datetime] = {}
         self.company = None
 
     @Slot()
@@ -50,11 +51,8 @@ class CompanyDataManager(QObject):
             and datetime.now() - self.fetch_company_timestamp
             < timedelta(seconds=FETCH_COMPANY_TIMEOUT_SECONDS)
         ):
-            _logger.debug(
-                f"Not fetching company data; last fetch was at {self.fetch_company_timestamp}"
-            )
             return self.company
-        _logger.info("Starting company data fetch...")
+        _logger.debug("Starting company data fetch...")
         try:
             self.company = self._fetch_with_retry(
                 "https://api.g2.galactictycoons.com/public/company", Company
@@ -80,12 +78,20 @@ class CompanyDataManager(QObject):
     @Slot(int)
     def fetch_base(self, id: int) -> Optional[Base]:
         """Fetch base data on demand."""
+        if (
+            id in self.base_dict
+            and self.fetch_base_timestamp.get(id)
+            and datetime.now() - self.fetch_base_timestamp[id]
+            < timedelta(seconds=FETCH_COMPANY_TIMEOUT_SECONDS)
+        ):
+            return self.base_dict[id]
         try:
             base = self._fetch_with_retry(
                 f"https://api.g2.galactictycoons.com/public/company/base/{id}", Base
             )
             if base:
                 self.base_dict[base.id] = base
+                self.fetch_base_timestamp[base.id] = datetime.now()
                 self.base_loaded.emit(base)
         except Exception as exc:  # noqa: BLE001
             _logger.error("Error fetching base data: %s", exc)

@@ -266,7 +266,7 @@ class ConfigurationWindow(QWidget):
             """Recalculate best recipes for all buildings in the tree."""
             from PySide6.QtCore import QTimer
 
-            # Collect all items that need recalculation
+            # Collect all items that need recalculation using QPersistentModelIndex
             items_to_recalculate = []
 
             for parent_row in range(self.rowCount()):
@@ -276,9 +276,6 @@ class ConfigurationWindow(QWidget):
                     for child_row in range(parent_item.rowCount()):
                         child_name = parent_item.child(child_row, 0)
                         child_level = parent_item.child(child_row, 1)
-                        child_recipe = parent_item.child(child_row, 2)
-                        child_profit = parent_item.child(child_row, 3)
-                        child_consumables = parent_item.child(child_row, 4)
 
                         if child_name and child_level:
                             building_type = child_name.data(Qt.ItemDataRole.UserRole)
@@ -287,12 +284,17 @@ class ConfigurationWindow(QWidget):
                             )
 
                             if building_type and building_level:
+                                # Store persistent model indexes instead of QStandardItem references
+                                recipe_index = QPersistentModelIndex(self.indexFromItem(parent_item.child(child_row, 2)))
+                                profit_index = QPersistentModelIndex(self.indexFromItem(parent_item.child(child_row, 3)))
+                                consumables_index = QPersistentModelIndex(self.indexFromItem(parent_item.child(child_row, 4)))
+                                
                                 items_to_recalculate.append(
                                     (
                                         building_type,
-                                        child_recipe,
-                                        child_profit,
-                                        child_consumables,
+                                        recipe_index,
+                                        profit_index,
+                                        consumables_index,
                                         base.planet_id,
                                     )
                                 )
@@ -308,11 +310,25 @@ class ConfigurationWindow(QWidget):
                 for i in range(start_idx, end_idx):
                     (
                         building_type,
-                        child_recipe,
-                        child_profit,
-                        child_consumables,
+                        recipe_index,
+                        profit_index,
+                        consumables_index,
                         planet_id,
                     ) = items_to_recalculate[i]
+                    
+                    # Check if indexes are still valid before accessing items
+                    if not recipe_index.isValid() or not profit_index.isValid() or not consumables_index.isValid():
+                        continue
+                    
+                    # Get items from persistent indexes
+                    child_recipe = self.itemFromIndex(recipe_index)
+                    child_profit = self.itemFromIndex(profit_index)
+                    child_consumables = self.itemFromIndex(consumables_index)
+                    
+                    # Double-check items are not None
+                    if not child_recipe or not child_profit or not child_consumables:
+                        continue
+                    
                     self._update_best_recipe_for_building(
                         building_type,
                         child_recipe,
@@ -413,9 +429,9 @@ class ConfigurationWindow(QWidget):
     def __init__(
         self,
         parent: QWidget | None = None,
-        settings=None,
-        recipe_worker=None,
-        company_manager=None,
+        settings: Optional[Settings] = None,
+        recipe_worker: Optional[RecipeWorker] = None,
+        company_manager: Optional[CompanyDataManager] = None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings

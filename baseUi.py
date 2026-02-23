@@ -90,11 +90,20 @@ class BaseWindow(QWidget):
         NO_MATERIALS = 3
 
     class ProductTableModel(QAbstractTableModel):
+        class ProductTableItem(BaseModel):
+            material_id: int
+            material_name: str
+            amount: float
+            current_price: float
+            average_price: float
+
+            @property
+            def price_delta(self) -> float:
+                return self.current_price - self.average_price
+
         def __init__(self, parent: QWidget):
             super().__init__(parent)
-            self._data: List[tuple[int, str, int, float]] = (
-                []
-            )  # (material_id, name, amount, price_delta)
+            self._data: List[BaseWindow.ProductTableModel.ProductTableItem] = []
             self._headers = ["Material", "Amount", "Price Δ"]
             self._sort_column = 2  # Default sort by Price
             self._sort_order = Qt.SortOrder.DescendingOrder
@@ -114,16 +123,21 @@ class BaseWindow(QWidget):
 
             if role == Qt.ItemDataRole.DisplayRole:
                 if col == 0:  # Material name
-                    return self._data[row][1]
+                    return self._data[row].material_name
                 elif col == 1:  # Amount
-                    return self._data[row][2]
+                    return self._data[row].amount
                 elif col == 2:  # Price delta
-                    price_delta = self._data[row][3]
-                    return f"{price_delta:+.2f}" if price_delta != 0 else "0.00"
+                    price_delta = self._data[row].price_delta
+                    average_price = self._data[row].average_price / 100
+                    return (
+                        f"{price_delta / average_price:+.1f}% ({price_delta / 100:+.2f})"
+                        if price_delta != 0
+                        else "0.00"
+                    )
 
             elif role == Qt.ItemDataRole.UserRole:
                 if col == 2:  # Price delta - provide raw numeric value for delegate
-                    return self._data[row][3]
+                    return self._data[row].price_delta / self._data[row].average_price
 
             return None
 
@@ -148,11 +162,13 @@ class BaseWindow(QWidget):
             reverse = order == Qt.SortOrder.DescendingOrder
 
             if column == 0:  # Material name
-                self._data.sort(key=lambda x: x[1].lower(), reverse=reverse)
+                self._data.sort(key=lambda x: x.material_name.lower(), reverse=reverse)
             elif column == 1:  # Amount
-                self._data.sort(key=lambda x: x[2], reverse=reverse)
+                self._data.sort(key=lambda x: x.amount, reverse=reverse)
             elif column == 2:  # Price delta
-                self._data.sort(key=lambda x: x[3], reverse=reverse)
+                self._data.sort(
+                    key=lambda x: x.price_delta / x.average_price, reverse=reverse
+                )
 
             self.layoutChanged.emit()
 
@@ -167,21 +183,31 @@ class BaseWindow(QWidget):
 
             for material_id, amount in materials_dict.items():
                 material = GameDataManager.get_material_by_id(material_id)
-                listing = Exchange.listings.get(material_id)
-                price_delta = (
-                    listing.current_price - listing.average_price if listing else 0
-                )
-                if material:
-                    self._data.append(
-                        (material_id, material.name, amount, price_delta / 100)
+                if material is None:
+                    _logger.warning(
+                        f"Material with ID {material_id} not found in game data, skipping."
                     )
+                    continue
+                listing = Exchange.listings.get(material_id)
+
+                self._data.append(
+                    self.ProductTableItem(
+                        material_id=material_id,
+                        material_name=material.name,
+                        amount=amount,
+                        current_price=listing.current_price if listing else 0.0,
+                        average_price=listing.average_price if listing else 0.0,
+                    )
+                )
 
             # Apply current sort order
             self.sort(self._sort_column, self._sort_order)
 
             # Update gradient delegate value range based on price deltas
             if price_delta_delegate and self._data:
-                price_deltas = [row[3] for row in self._data]
+                price_deltas = [
+                    row.price_delta / row.average_price for row in self._data
+                ]
                 min_delta = min(price_deltas)
                 max_delta = max(price_deltas)
                 # Ensure range is centered around 0 for proper red/green gradient
