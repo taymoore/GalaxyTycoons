@@ -233,6 +233,7 @@ class BaseWindow(QWidget):
             recipe_id: int
             output_name: Optional[str] = None
             amount: Optional[int]
+            amount_over_ordered: Optional[float] = None
             profit_per_hour: Optional[float] = None
             building_name: Optional[str] = None
             inputs: Optional[str] = None
@@ -277,7 +278,11 @@ class BaseWindow(QWidget):
                         else "N/A"
                     )
                 elif col == 2:  # Amount
-                    return self._data[row].amount
+                    return (
+                        self._data[row].amount
+                        if self._data[row].amount_over_ordered is None
+                        else f"{self._data[row].amount} (+{self._data[row].amount_over_ordered:.1f})"
+                    )
                 elif col == 3:  # Profit/hr
                     profit_per_hour = self._data[row].profit_per_hour
                     if profit_per_hour is not None:
@@ -546,14 +551,6 @@ class BaseWindow(QWidget):
                 for mat in ship.warehouse.materials:
                     materials_dict[mat.id] = materials_dict.get(mat.id, 0) + mat.amount
 
-        # Subtract active recipies consumables from warehouse materials
-        for order in base.production_orders:
-            recipe = GameDataManager.get_recipe_by_id(order.recipe_id)
-            for consumable in recipe.inputs:
-                materials_dict[consumable.id] = (
-                    materials_dict.get(consumable.id, 0) - consumable.am * order.amount
-                )
-
         # Subtract consumables from workforce
         if base.workforce is not None:
             for consumable in base.workforce.consumption_materials:
@@ -562,18 +559,42 @@ class BaseWindow(QWidget):
                     - consumable.rate * DAYS_CONSUMABLE_BUFFER
                 )
 
+        # Find all active recipes
         recipes_dict: Dict[int, BaseWindow.RecipeTableModel.RecipeTableItem] = {}
         for order in base.production_orders:
             recipe = GameDataManager.get_recipe_by_id(order.recipe_id)
-            amount = (
-                order.amount + recipes_dict[order.recipe_id].amount
+
+            # Amount already removed from materials_dict from previous orders of same recipe
+            amount_prev = (
+                recipes_dict[order.recipe_id].amount
                 if order.recipe_id in recipes_dict
-                else order.amount
+                else 0
             )
+
+            potential_amount = self.find_potential_amount_for_recipe(
+                recipe, materials_dict
+            )
+            amount_to_consume = (
+                potential_amount if potential_amount < order.amount else order.amount
+            )
+
+            # Subtract active recipe consumables from warehouse materials
+            for consumable in recipe.inputs:
+                materials_dict[consumable.id] = (
+                    materials_dict.get(consumable.id, 0)
+                    - consumable.am * amount_to_consume
+                )
+
+            # Add active recipes to recipes_dict, summing amounts if multiple orders for same recipe
             recipes_dict[order.recipe_id] = BaseWindow.RecipeTableModel.RecipeTableItem(
                 recipe_id=order.recipe_id,
                 status=BaseWindow.RecipeStatus.IN_PROGRESS,
-                amount=amount,
+                amount=amount_prev + amount_to_consume,
+                amount_over_ordered=(
+                    order.amount - amount_to_consume
+                    if order.amount > amount_to_consume
+                    else None
+                ),
             )
 
         recipes = list(recipes_dict.values())
@@ -597,20 +618,9 @@ class BaseWindow(QWidget):
             )
             if recipe.reqTech > tech_level:
                 continue
-            potential_amount = math.inf
-            for input_mat in recipe.inputs:
-                if materials_dict.get(input_mat.id, 0) < input_mat.am:
-                    potential_amount = 0
-                    break
-                potential_amount = min(
-                    potential_amount,
-                    materials_dict.get(input_mat.id, 0) // input_mat.am,
-                )
-            if potential_amount == math.inf:
-                _logger.warning(
-                    f"Recipe {GameDataManager.get_item_name(recipe.output.id)} [{recipe.id}] has no inputs, skipping standby check."
-                )
-                continue
+            potential_amount = self.find_potential_amount_for_recipe(
+                recipe, materials_dict
+            )
             if potential_amount == 0:
                 continue
             for input_mat in recipe.inputs:
@@ -638,7 +648,23 @@ class BaseWindow(QWidget):
 
         # Add potential recipes
         # TODO: Sort by most profitable to least profitable potential recipes instead of just adding in game data order
-        for recipe in GameDataManager.get().recipes:
+        for recipe in sorted(
+            GameDataManager.get().recipes,
+            key=lambda r: (
+                result[0]
+                if (
+                    result := calculate_profit_and_consumables(
+                        r,
+                        self.technology_levels.get(
+                            GameDataManager.get_building(r.producedIn).specialization, 0
+                        ),
+                    )
+                )
+                is not None
+                else float("-inf")
+            ),
+            reverse=True,
+        ):
             # Skip recipes already added
             if any(recipe.id == r.recipe_id for r in recipes):
                 continue
@@ -708,6 +734,24 @@ class BaseWindow(QWidget):
         production_time_hours = min(production_time_minutes.values()) / 60
         tab_name = f"{base.name} - {production_time_hours:.1f}h"
         self.update_tab_name_signal.emit(base.id, tab_name)
+
+    def find_potential_amount_for_recipe(
+        self, recipe: Recipe, materials_dict: Dict[int, int]
+    ) -> int:
+        potential_amount = math.inf
+        for input_mat in recipe.inputs:
+            if materials_dict.get(input_mat.id, 0) < input_mat.am:
+                return 0
+            potential_amount = min(
+                potential_amount,
+                materials_dict.get(input_mat.id, 0) // input_mat.am,
+            )
+        if potential_amount == math.inf:
+            _logger.warning(
+                f"Recipe {GameDataManager.get_item_name(recipe.output.id)} [{recipe.id}] has no inputs, skipping potential amount calculation."
+            )
+            return 0
+        return potential_amount
 
     def update_delegate_ranges(self):
         """Update the min/max ranges for gradient delegates based on all rows."""
