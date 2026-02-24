@@ -227,11 +227,101 @@ class BaseWindow(QWidget):
             )
             self.setSortingEnabled(True)
 
+    class BuildingTableModel(QAbstractTableModel):
+        class BuildingItem(BaseModel):
+            building_name: str
+            total_duration: (
+                float  # Total duration in hours for all recipes in this building
+            )
+
+        def __init__(self, parent: QWidget):
+            super().__init__(parent)
+            self._data: List[BaseWindow.BuildingTableModel.BuildingItem] = []
+            self._headers = ["Building", "Total Duration"]
+
+        def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+            return len(self._data)
+
+        def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+            return len(self._headers)
+
+        def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+            if not index.isValid():
+                return None
+
+            row = index.row()
+            col = index.column()
+
+            if role == Qt.ItemDataRole.DisplayRole:
+                if col == 0:  # Building name
+                    return self._data[row].building_name
+                elif col == 1:  # Total duration
+                    return f"{self._data[row].total_duration:.2f}h"
+
+            elif role == Qt.ItemDataRole.UserRole:
+                if col == 0:  # Building name - for sorting
+                    return self._data[row].building_name.lower()
+                elif col == 1:  # Total duration - for sorting
+                    return self._data[row].total_duration
+
+            return None
+
+        def headerData(
+            self,
+            section: int,
+            orientation: Qt.Orientation,
+            role: int = Qt.ItemDataRole.DisplayRole,
+        ):
+            if role == Qt.ItemDataRole.DisplayRole:
+                if orientation == Qt.Orientation.Horizontal:
+                    return self._headers[section]
+            return None
+
+        def sort(self, column: int, order: Qt.SortOrder = Qt.SortOrder.AscendingOrder):
+            """Sort table by given column and order."""
+            self.layoutAboutToBeChanged.emit()
+
+            reverse = order == Qt.SortOrder.DescendingOrder
+
+            if column == 0:  # Building name
+                self._data.sort(key=lambda x: x.building_name.lower(), reverse=reverse)
+            elif column == 1:  # Total duration
+                self._data.sort(key=lambda x: x.total_duration, reverse=reverse)
+
+            self.layoutChanged.emit()
+
+        def set_building_durations(self, building_durations: Dict[str, float]):
+            """Populate the table with building names and their total recipe durations."""
+            self.beginResetModel()
+            self._data.clear()
+
+            for building_name, total_duration in building_durations.items():
+                self._data.append(
+                    self.BuildingItem(
+                        building_name=building_name,
+                        total_duration=total_duration,
+                    )
+                )
+
+            # Sort by total duration descending by default
+            self._data.sort(key=lambda x: x.total_duration, reverse=True)
+
+            self.endResetModel()
+
+    class BuildingTableView(QTableView):
+        def __init__(self, parent: QWidget):
+            super().__init__(parent)
+            self.horizontalHeader().setSectionResizeMode(
+                QHeaderView.ResizeMode.ResizeToContents
+            )
+            self.setSortingEnabled(True)
+
     class RecipeTableModel(QAbstractTableModel):
 
         class RecipeTableItem(BaseModel):
             recipe_id: int
             output_name: Optional[str] = None
+            amount_to_buy: Optional[int] = None
             amount: Optional[int]
             amount_over_ordered: Optional[float] = None
             profit_per_hour: Optional[float] = None
@@ -248,6 +338,7 @@ class BaseWindow(QWidget):
             self._headers = [
                 "Recipe",
                 "Duration",
+                "To buy",
                 "Amount",
                 "Profit/hr",
                 "In Progress",
@@ -277,22 +368,28 @@ class BaseWindow(QWidget):
                         if self._data[row].duration
                         else "N/A"
                     )
-                elif col == 2:  # Amount
+                elif col == 2:  # To buy
+                    return (
+                        self._data[row].amount_to_buy
+                        if self._data[row].amount_to_buy
+                        else ""
+                    )
+                elif col == 3:  # Amount
                     return (
                         self._data[row].amount
                         if self._data[row].amount_over_ordered is None
                         else f"{self._data[row].amount} (+{self._data[row].amount_over_ordered:.1f})"
                     )
-                elif col == 3:  # Profit/hr
+                elif col == 4:  # Profit/hr
                     profit_per_hour = self._data[row].profit_per_hour
                     if profit_per_hour is not None:
                         return f"{profit_per_hour:,.0f}"
                     return "N/A"
-                elif col == 4:  # In progress
+                elif col == 5:  # In progress
                     return self._data[row].status.name.replace("_", " ").title()
-                elif col == 5:  # Building name
+                elif col == 6:  # Building name
                     return self._data[row].building_name
-                elif col == 6:  # Inputs
+                elif col == 7:  # Inputs
                     return self._data[row].inputs
 
             elif role == Qt.ItemDataRole.UserRole:
@@ -308,15 +405,21 @@ class BaseWindow(QWidget):
                         if self._data[row].duration is not None
                         else float("inf")
                     )
-                elif col == 2:  # Amount - provide raw numeric value for sorting
+                elif col == 2:  # To buy - provide raw numeric value for sorting
+                    return (
+                        self._data[row].amount_to_buy
+                        if self._data[row].amount_to_buy
+                        else 0
+                    )
+                elif col == 3:  # Amount - provide raw numeric value for sorting
                     return self._data[row].amount
-                elif col == 3:  # Profit/hr - provide raw numeric value for delegate
+                elif col == 4:  # Profit/hr - provide raw numeric value for delegate
                     return self._data[row].profit_per_hour
-                elif col == 4:
-                    return self._data[row].status.value
                 elif col == 5:
-                    return self._data[row].building_name
+                    return self._data[row].status.value
                 elif col == 6:
+                    return self._data[row].building_name
+                elif col == 7:
                     return self._data[row].inputs
 
             return None
@@ -505,7 +608,10 @@ class BaseWindow(QWidget):
 
         splitter.addWidget(self.recipe_table_view)
 
-        # Create Product table (right side)
+        # Create right side with vertical splitter
+        right_splitter = QSplitter(Qt.Orientation.Vertical, self)
+
+        # Create Product table (right top)
         self.product_table_model = BaseWindow.ProductTableModel(self)
         self.product_table_view = BaseWindow.ProductTableView(self)
         self.product_table_view.setModel(self.product_table_model)
@@ -514,11 +620,24 @@ class BaseWindow(QWidget):
         self.price_delta_delegate = GradientColorDelegate(self.product_table_view)
         self.product_table_view.setItemDelegateForColumn(2, self.price_delta_delegate)
 
-        splitter.addWidget(self.product_table_view)
+        right_splitter.addWidget(self.product_table_view)
 
-        # Set stretch factors (both tables get equal space)
-        splitter.setStretchFactor(0, 1)  # Recipe table
-        splitter.setStretchFactor(1, 1)  # Product table
+        # Create Building Summary table (right bottom)
+        self.building_summary_model = BaseWindow.BuildingTableModel(self)
+        self.building_summary_view = BaseWindow.BuildingTableView(self)
+        self.building_summary_view.setModel(self.building_summary_model)
+
+        right_splitter.addWidget(self.building_summary_view)
+
+        # Set stretch factors for right splitter (product table gets more space)
+        right_splitter.setStretchFactor(0, 4)  # Product table (top)
+        right_splitter.setStretchFactor(1, 1)  # Building summary table (bottom)
+
+        splitter.addWidget(right_splitter)
+
+        # Set stretch factors (both sides get equal space)
+        splitter.setStretchFactor(0, 1)  # Recipe table (left)
+        splitter.setStretchFactor(1, 1)  # Right side (product + building summary)
 
     @Slot(Company)
     def handle_company_loaded(self, company: Company):
@@ -687,6 +806,22 @@ class BaseWindow(QWidget):
         self.recipe_table_model.set_recipes(
             recipes, self.technology_levels, building_types
         )
+
+        # Calculate building summary (total duration per building)
+        building_durations: Dict[str, float] = {}
+        for recipe_item in self.recipe_table_model._data:
+            # Only include recipes that have a duration (IN_PROGRESS and STANDBY statuses)
+            if (
+                recipe_item.duration is not None
+                and recipe_item.building_name is not None
+            ):
+                building_durations[recipe_item.building_name] = (
+                    building_durations.get(recipe_item.building_name, 0.0)
+                    + recipe_item.duration
+                )
+
+        # Populate the BuildingSummaryTable with building durations
+        self.building_summary_model.set_building_durations(building_durations)
 
         # Populate the ProductTable with materials
         self.product_table_model.set_materials(
