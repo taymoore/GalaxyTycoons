@@ -173,6 +173,11 @@ class MainWindow(QMainWindow):
         self.average_price_action.triggered.connect(self._toggle_average_price)
         tools_menu.addAction(self.average_price_action)
 
+        # Calculate Purchase
+        calculate_purchase_action = QAction("Calculate", self)
+        menubar.addAction(calculate_purchase_action)
+        calculate_purchase_action.setVisible(False)  # Hide until implemented
+
     def _copy_listings_to_clipboard(self) -> None:
         """Copy all listings to clipboard in tab-separated format for Excel."""
         if not Exchange.listings:

@@ -107,6 +107,9 @@ class BaseWindow(QWidget):
             self._headers = ["Material", "Amount", "Price Δ"]
             self._sort_column = 2  # Default sort by Price
             self._sort_order = Qt.SortOrder.DescendingOrder
+            
+            # Create delegate for price delta column
+            self.price_delta_delegate = GradientColorDelegate(parent)
 
         def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
             return len(self._data)
@@ -175,7 +178,6 @@ class BaseWindow(QWidget):
         def set_materials(
             self,
             materials_dict: Dict[int, int],
-            price_delta_delegate: GradientColorDelegate = None,
         ):
             """Populate the table with materials from the dictionary."""
             self.beginResetModel()
@@ -207,7 +209,7 @@ class BaseWindow(QWidget):
             self.sort(self._sort_column, self._sort_order)
 
             # Update gradient delegate value range based on price deltas
-            if price_delta_delegate and self._data:
+            if self._data:
                 price_deltas = [
                     row.price_delta / row.average_price for row in self._data
                 ]
@@ -215,7 +217,7 @@ class BaseWindow(QWidget):
                 max_delta = max(price_deltas)
                 # Ensure range is centered around 0 for proper red/green gradient
                 abs_max = max(abs(min_delta), abs(max_delta))
-                price_delta_delegate.set_value_range(-abs_max, abs_max)
+                self.price_delta_delegate.set_value_range(-abs_max, abs_max)
 
             self.endResetModel()
 
@@ -226,6 +228,12 @@ class BaseWindow(QWidget):
                 QHeaderView.ResizeMode.ResizeToContents
             )
             self.setSortingEnabled(True)
+
+        def setModel(self, model: "BaseWindow.ProductTableModel") -> None:
+            """Override setModel to configure delegates from the model."""
+            super().setModel(model)
+            if model:
+                self.setItemDelegateForColumn(2, model.price_delta_delegate)
 
     class BuildingTableModel(QAbstractTableModel):
         class BuildingItem(BaseModel):
@@ -238,6 +246,10 @@ class BaseWindow(QWidget):
             super().__init__(parent)
             self._data: List[BaseWindow.BuildingTableModel.BuildingItem] = []
             self._headers = ["Building", "Total Duration"]
+            
+            # Create delegates
+            self.building_delegate = BuildingColorDelegate(parent)
+            self.duration_delegate = GradientColorDelegate(parent)
 
         def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
             return len(self._data)
@@ -290,21 +302,31 @@ class BaseWindow(QWidget):
 
             self.layoutChanged.emit()
 
-        def set_building_durations(self, building_durations: Dict[str, float]):
+        def set_building_durations(
+            self,
+            building_durations: Dict[int, float],
+        ):
             """Populate the table with building names and their total recipe durations."""
             self.beginResetModel()
             self._data.clear()
 
-            for building_name, total_duration in building_durations.items():
+            for building_id, total_duration in building_durations.items():
                 self._data.append(
                     self.BuildingItem(
-                        building_name=building_name,
+                        building_name=GameDataManager.get_building(building_id).name,
                         total_duration=total_duration,
                     )
                 )
 
             # Sort by total duration descending by default
             self._data.sort(key=lambda x: x.total_duration, reverse=True)
+
+            # Update gradient delegate value range based on durations
+            if self._data:
+                durations = [row.total_duration for row in self._data]
+                min_duration = min(durations)
+                max_duration = max(durations)
+                self.duration_delegate.set_value_range(min_duration, max_duration)
 
             self.endResetModel()
 
@@ -316,6 +338,13 @@ class BaseWindow(QWidget):
             )
             self.setSortingEnabled(True)
 
+        def setModel(self, model: "BaseWindow.BuildingTableModel") -> None:
+            """Override setModel to configure delegates from the model."""
+            super().setModel(model)
+            if model:
+                self.setItemDelegateForColumn(0, model.building_delegate)
+                self.setItemDelegateForColumn(1, model.duration_delegate)
+
     class RecipeTableModel(QAbstractTableModel):
 
         class RecipeTableItem(BaseModel):
@@ -326,7 +355,6 @@ class BaseWindow(QWidget):
             amount_over_ordered: Optional[float] = None
             profit_per_hour: Optional[float] = None
             building_name: Optional[str] = None
-            inputs: Optional[str] = None
             status: "BaseWindow.RecipeStatus"
             duration: Optional[float] = (
                 None  # Duration in hours, calculated from recipe time and building speed
@@ -343,8 +371,12 @@ class BaseWindow(QWidget):
                 "Profit/hr",
                 "In Progress",
                 "Building",
-                "Inputs",
             ]
+            
+            # Create delegates
+            self.profit_delegate = GradientColorDelegate(parent)
+            self.status_delegate = StatusColorDelegate(parent)
+            self.building_delegate = BuildingColorDelegate(parent)
 
         def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
             return len(self._data)
@@ -389,8 +421,6 @@ class BaseWindow(QWidget):
                     return self._data[row].status.name.replace("_", " ").title()
                 elif col == 6:  # Building name
                     return self._data[row].building_name
-                elif col == 7:  # Inputs
-                    return self._data[row].inputs
 
             elif role == Qt.ItemDataRole.UserRole:
                 if col == 0:  # Recipe name - provide output name for sorting
@@ -419,8 +449,6 @@ class BaseWindow(QWidget):
                     return self._data[row].status.value
                 elif col == 6:
                     return self._data[row].building_name
-                elif col == 7:
-                    return self._data[row].inputs
 
             return None
 
@@ -451,7 +479,15 @@ class BaseWindow(QWidget):
                     ),
                     reverse=reverse,
                 )
-            elif column == 2:  # Amount
+            elif column == 2:  # To buy
+                self._data.sort(
+                    key=lambda x: (
+                        x.amount_to_buy is None,
+                        x.amount_to_buy if x.amount_to_buy is not None else 0,
+                    ),
+                    reverse=reverse,
+                )
+            elif column == 3:  # Amount
                 self._data.sort(
                     key=lambda x: (
                         x.amount is None,
@@ -459,7 +495,7 @@ class BaseWindow(QWidget):
                     ),
                     reverse=reverse,
                 )
-            elif column == 3:  # Profit/hr
+            elif column == 4:  # Profit/hr
                 self._data.sort(
                     key=lambda x: (
                         x.profit_per_hour is None,
@@ -471,12 +507,10 @@ class BaseWindow(QWidget):
                     ),
                     reverse=reverse,
                 )
-            elif column == 4:  # In Progress (status)
+            elif column == 5:  # In Progress (status)
                 self._data.sort(key=lambda x: x.status.lower(), reverse=reverse)
-            elif column == 5:  # Building name
+            elif column == 6:  # Building name
                 self._data.sort(key=lambda x: x.building_name.lower(), reverse=reverse)
-            elif column == 6:  # Inputs
-                self._data.sort(key=lambda x: x.inputs.lower(), reverse=reverse)
 
             self.layoutChanged.emit()
 
@@ -512,14 +546,11 @@ class BaseWindow(QWidget):
                     )
 
                 if recipe_item.duration is None and recipe_item.amount is not None:
-                    recipe_item.duration = (
-                        recipe.timeMinutes
-                        * recipe_item.amount
-                        / (
-                            (1 + 0.05 * tech_level)
-                            * 60
-                            * building_count[recipe.producedIn]
-                        )
+                    recipe_item.duration = BaseWindow.calculate_recipe_duration(
+                        recipe,
+                        tech_level,
+                        building_count[recipe.producedIn],
+                        recipe_item.amount,
                     )
 
                 if recipe_item.building_name is None:
@@ -531,13 +562,6 @@ class BaseWindow(QWidget):
                         recipe_item.profit_per_hour, _, _ = result
                     else:
                         recipe_item.profit_per_hour = None
-
-                if recipe_item.inputs is None:
-                    inputs_list = []
-                    for input_mat in recipe.inputs:
-                        mat_name = GameDataManager.get_item_name(input_mat.id)
-                        inputs_list.append(f"{mat_name} x{input_mat.am}")
-                    recipe_item.inputs = ", ".join(inputs_list)
 
                 self._data.append(recipe_item)
 
@@ -555,6 +579,32 @@ class BaseWindow(QWidget):
             )
 
             self.endResetModel()
+            self.update_delegate_ranges()
+
+        def update_delegate_ranges(self):
+            """Update the min/max ranges for gradient delegates based on all rows."""
+            profit_values = []
+
+            # Iterate through all rows in the model
+            for row_data in self._data:
+                profit_val = row_data.profit_per_hour
+                if (
+                    profit_val is not None
+                    and isinstance(profit_val, (int, float))
+                    and math.isfinite(profit_val)
+                ):
+                    profit_values.append(profit_val)
+
+            # Update profit delegate range
+            if profit_values:
+                profit_min = min(profit_values)
+                profit_max = max(profit_values)
+                if profit_max == profit_min:
+                    profit_max = profit_min + 1.0
+            else:
+                profit_min = profit_max = 0.0
+
+            self.profit_delegate.set_value_range(profit_min, profit_max)
 
     class RecipeTableView(QTableView):
         def __init__(self, parent: QWidget):
@@ -563,6 +613,19 @@ class BaseWindow(QWidget):
                 QHeaderView.ResizeMode.ResizeToContents
             )
             self.setSortingEnabled(True)
+
+        def setModel(self, model: "BaseWindow.RecipeTableModel") -> None:
+            """Override setModel to configure delegates from the model."""
+            super().setModel(model)
+            if model:
+                self.setItemDelegateForColumn(4, model.profit_delegate)
+                self.setItemDelegateForColumn(5, model.status_delegate)
+                self.setItemDelegateForColumn(6, model.building_delegate)
+                
+                # Connect to model data changes to update delegate ranges
+                model.dataChanged.connect(model.update_delegate_ranges)
+                model.layoutChanged.connect(model.update_delegate_ranges)
+                model.modelReset.connect(model.update_delegate_ranges)
 
     update_tab_name_signal = Signal(int, str)
 
@@ -589,23 +652,6 @@ class BaseWindow(QWidget):
         self.recipe_table_view = BaseWindow.RecipeTableView(self)
         self.recipe_table_view.setModel(self.recipe_table_model)
 
-        # Add gradient color delegate for profit_per_hour column
-        self.profit_delegate = GradientColorDelegate(self.recipe_table_view)
-        self.recipe_table_view.setItemDelegateForColumn(3, self.profit_delegate)
-
-        # Apply status color delegate to "In Progress" column
-        self.status_delegate = StatusColorDelegate(self.recipe_table_view)
-        self.recipe_table_view.setItemDelegateForColumn(4, self.status_delegate)
-
-        # Apply building color delegate to building column
-        self.building_delegate = BuildingColorDelegate(self.recipe_table_view)
-        self.recipe_table_view.setItemDelegateForColumn(5, self.building_delegate)
-
-        # Connect to model data changes to update delegate ranges
-        self.recipe_table_model.dataChanged.connect(self.update_delegate_ranges)
-        self.recipe_table_model.layoutChanged.connect(self.update_delegate_ranges)
-        self.recipe_table_model.modelReset.connect(self.update_delegate_ranges)
-
         splitter.addWidget(self.recipe_table_view)
 
         # Create right side with vertical splitter
@@ -615,10 +661,6 @@ class BaseWindow(QWidget):
         self.product_table_model = BaseWindow.ProductTableModel(self)
         self.product_table_view = BaseWindow.ProductTableView(self)
         self.product_table_view.setModel(self.product_table_model)
-
-        # Add gradient color delegate for price_delta column
-        self.price_delta_delegate = GradientColorDelegate(self.product_table_view)
-        self.product_table_view.setItemDelegateForColumn(2, self.price_delta_delegate)
 
         right_splitter.addWidget(self.product_table_view)
 
@@ -728,6 +770,26 @@ class BaseWindow(QWidget):
                 + building_slot.building.level
             )
 
+        # Calculate durations for IN_PROGRESS only
+        building_durations: Dict[str, float] = {}
+        for recipe_item in recipes:
+            recipe = GameDataManager.get_recipe_by_id(recipe_item.recipe_id)
+            duration = self.calculate_recipe_duration(
+                recipe,
+                self.technology_levels.get(
+                    GameDataManager.get_building(recipe.producedIn).specialization, 0
+                ),
+                building_types[recipe.producedIn],
+                recipe_item.amount,
+            )
+            building_durations[recipe.producedIn] = duration + building_durations.get(
+                recipe.producedIn, 0
+            )
+            recipe_item.duration = duration
+
+        # Populate the BuildingSummaryTable with building durations
+        self.building_summary_model.set_building_durations(building_durations)
+
         # Find potential recipes that we have materials for but are not currently producing (standby)
         for recipe in GameDataManager.get().recipes:
             if recipe.producedIn not in building_types:
@@ -807,72 +869,20 @@ class BaseWindow(QWidget):
             recipes, self.technology_levels, building_types
         )
 
-        # Calculate building summary (total duration per building)
-        building_durations: Dict[str, float] = {}
-        for recipe_item in self.recipe_table_model._data:
-            # Only include recipes that have a duration (IN_PROGRESS and STANDBY statuses)
-            if (
-                recipe_item.duration is not None
-                and recipe_item.building_name is not None
-            ):
-                building_durations[recipe_item.building_name] = (
-                    building_durations.get(recipe_item.building_name, 0.0)
-                    + recipe_item.duration
-                )
-
-        # Populate the BuildingSummaryTable with building durations
-        self.building_summary_model.set_building_durations(building_durations)
-
         # Populate the ProductTable with materials
-        self.product_table_model.set_materials(
-            materials_dict, self.price_delta_delegate
-        )
-
-        # Calculate production time
-        production_time_minutes: Dict[int, float] = (
-            {}
-        )  # Dict of building_id to total production time in minutes
-        for order in base.production_orders:
-            recipe = GameDataManager.get_recipe_by_id(order.recipe_id)
-            if recipe:
-                if recipe.producedIn not in building_types:
-                    _logger.warning(
-                        f"Recipe {GameDataManager.get_item_name(GameDataManager.get_recipe_by_id(recipe.id).output.id)} [{recipe.id}] requires building {GameDataManager.get_building(recipe.producedIn).name} [{recipe.producedIn}] which is not present in base {base.name}."
-                    )
-                    continue
-                specialization = GameDataManager.get_building(
-                    recipe.producedIn
-                ).specialization
-                if specialization not in self.technology_levels:
-                    _logger.warning(
-                        f"Recipe {GameDataManager.get_item_name(GameDataManager.get_recipe_by_id(recipe.id).output.id)} [{recipe.id}] requires technology level {recipe.reqTech} which is not researched in company."
-                    )
-                production_time_minutes[recipe.producedIn] = (
-                    recipe.timeMinutes * order.amount
-                ) / (
-                    building_types[recipe.producedIn]
-                    * (
-                        1
-                        + (
-                            0.05
-                            * self.technology_levels.get(
-                                specialization,
-                                0,
-                            )
-                        )
-                    )
-                ) + production_time_minutes.get(
-                    recipe.producedIn, 0
-                )
+        self.product_table_model.set_materials(materials_dict)
 
         # Update tab name with production time
-        production_time_hours = min(production_time_minutes.values()) / 60
-        tab_name = f"{base.name} - {production_time_hours:.1f}h"
+        tab_name = f"{base.name} - {min(building_durations.values()):.1f}h"
         self.update_tab_name_signal.emit(base.id, tab_name)
 
+    @staticmethod
     def find_potential_amount_for_recipe(
-        self, recipe: Recipe, materials_dict: Dict[int, int]
+        recipe: Recipe, materials_dict: Dict[int, int]
     ) -> int:
+        """
+        Calculate the potential amount of a recipe that can be produced with the given materials dictionary.
+        """
         potential_amount = math.inf
         for input_mat in recipe.inputs:
             if materials_dict.get(input_mat.id, 0) < input_mat.am:
@@ -887,6 +897,19 @@ class BaseWindow(QWidget):
             )
             return 0
         return potential_amount
+
+    @staticmethod
+    def calculate_recipe_duration(
+        recipe: Recipe, tech_level: int, building_count: int, amount: int = 1
+    ) -> float:
+        """
+        Calculate the duration of a recipe in hours
+        """
+        return (
+            recipe.timeMinutes
+            * amount
+            / ((1 + 0.05 * tech_level) * building_count * 60)
+        )
 
     def update_delegate_ranges(self):
         """Update the min/max ranges for gradient delegates based on all rows."""
