@@ -734,64 +734,54 @@ class BaseWindow(QWidget):
         # Create main layout
         main_layout = QVBoxLayout(self)
 
-        # Create horizontal splitter
-        splitter = QSplitter(Qt.Orientation.Horizontal, self)
-        main_layout.addWidget(splitter)
+        # Create main horizontal splitter
+        main_splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        main_layout.addWidget(main_splitter)
 
-        # Create Recipe table (left side)
+        # Create left side with vertical splitter for recipe table and building summary
+        left_splitter = QSplitter(Qt.Orientation.Vertical, self)
+
+        # Create Recipe table (top-left)
         self.recipe_table_model = BaseWindow.RecipeTableModel(self)
         self.recipe_table_view = BaseWindow.RecipeTableView(self)
         self.recipe_table_view.setModel(self.recipe_table_model)
 
-        splitter.addWidget(self.recipe_table_view)
+        left_splitter.addWidget(self.recipe_table_view)
 
-        # Create right side with vertical splitter
-        right_splitter = QSplitter(Qt.Orientation.Vertical, self)
+        # Create Building Summary table (bottom-left)
+        self.building_summary_model = BaseWindow.BuildingTableModel(self)
+        self.building_summary_view = BaseWindow.BuildingTableView(self)
+        self.building_summary_view.setModel(self.building_summary_model)
 
-        # Create top right section with horizontal splitter for materials table and graph
-        top_right_splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        left_splitter.addWidget(self.building_summary_view)
 
-        # Create Product table (left side of top right section)
+        # Set stretch factors for left splitter
+        left_splitter.setStretchFactor(0, 4)  # Recipe table gets more space
+        left_splitter.setStretchFactor(1, 1)  # Building summary table
+
+        main_splitter.addWidget(left_splitter)
+
+        # Create Product table (center)
         self.product_table_model = BaseWindow.ProductTableModel(self)
         self.product_table_view = BaseWindow.ProductTableView(self)
         self.product_table_view.setModel(self.product_table_model)
         self.product_table_view.technology_levels = self.technology_levels
 
-        top_right_splitter.addWidget(self.product_table_view)
+        main_splitter.addWidget(self.product_table_view)
 
-        # Create PriceGraph (right side of top right section)
+        # Create PriceGraph (right)
         self.price_graph = PriceGraph(self)
-        top_right_splitter.addWidget(self.price_graph)
+        main_splitter.addWidget(self.price_graph)
 
         # Connect recipe table clicks to update the price graph
         self.recipe_table_view.recipe_clicked.connect(self.price_graph.plot_recipe)
         # Connect product table clicks to update the price graph
         self.product_table_view.recipe_clicked.connect(self.price_graph.plot_recipe)
 
-        # Set stretch factors for top right splitter
-        top_right_splitter.setStretchFactor(0, 1)  # Product table
-        top_right_splitter.setStretchFactor(1, 5)  # Price graph gets more space
-
-        right_splitter.addWidget(top_right_splitter)
-
-        # Create Building Summary table (right bottom)
-        self.building_summary_model = BaseWindow.BuildingTableModel(self)
-        self.building_summary_view = BaseWindow.BuildingTableView(self)
-        self.building_summary_view.setModel(self.building_summary_model)
-
-        right_splitter.addWidget(self.building_summary_view)
-
-        # Set stretch factors for right splitter (top section gets more space)
-        right_splitter.setStretchFactor(0, 4)  # Top section (materials + graph)
-        right_splitter.setStretchFactor(1, 1)  # Building summary table (bottom)
-
-        splitter.addWidget(right_splitter)
-
-        # Set stretch factors (both sides get equal space)
-        splitter.setStretchFactor(0, 1)  # Recipe table (left)
-        splitter.setStretchFactor(
-            1, 1
-        )  # Right side (materials + graph + building summary)
+        # Set stretch factors for main splitter
+        main_splitter.setStretchFactor(0, 2)  # Left side (recipe + building summary)
+        main_splitter.setStretchFactor(1, 1)  # Product table (center)
+        main_splitter.setStretchFactor(2, 3)  # Price graph (right) gets most space
 
     @Slot(Company)
     def handle_company_loaded(self, company: Company):
