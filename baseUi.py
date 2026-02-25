@@ -70,6 +70,7 @@ from utils import (
     BuildingColorDelegate,
     ConsumablesDelegate,
     GradientColorDelegate,
+    PriceGraph,
     SpecializationColorDelegate,
     StatusColorDelegate,
     align_add,
@@ -107,7 +108,7 @@ class BaseWindow(QWidget):
             self._headers = ["Material", "Amount", "Price Δ"]
             self._sort_column = 2  # Default sort by Price
             self._sort_order = Qt.SortOrder.DescendingOrder
-            
+
             # Create delegate for price delta column
             self.price_delta_delegate = GradientColorDelegate(parent)
 
@@ -222,12 +223,56 @@ class BaseWindow(QWidget):
             self.endResetModel()
 
     class ProductTableView(QTableView):
+        recipe_clicked = Signal(Recipe)
+
         def __init__(self, parent: QWidget):
             super().__init__(parent)
             self.horizontalHeader().setSectionResizeMode(
                 QHeaderView.ResizeMode.ResizeToContents
             )
             self.setSortingEnabled(True)
+            self.technology_levels: Dict[int, int] = {}
+
+            self.clicked.connect(self.handle_table_clicked)
+
+        @Slot(QModelIndex)
+        def handle_table_clicked(self, index: QModelIndex) -> None:
+            if not index.isValid():
+                return
+            # Get the material from the model
+            source_model = self.model()
+            assert isinstance(source_model, BaseWindow.ProductTableModel)
+            row = index.row()
+            if row < len(source_model._data):
+                material_id = source_model._data[row].material_id
+
+                # Find the most profitable recipe that produces this material
+                best_recipe = None
+                best_profit = float("-inf")
+
+                for recipe in GameDataManager.get().recipes:
+                    if recipe.output.id != material_id:
+                        continue
+
+                    # Get tech level for this recipe's building
+                    building = GameDataManager.get_building(recipe.producedIn)
+                    if building is None:
+                        continue
+                    tech_level = self.technology_levels.get(building.specialization, 0)
+
+                    # Calculate profit for this recipe
+                    result = calculate_profit_and_consumables(recipe, tech_level)
+                    if result is None:
+                        continue
+
+                    profit, _, _ = result
+                    if profit > best_profit:
+                        best_profit = profit
+                        best_recipe = recipe
+
+                # Emit the best recipe if found
+                if best_recipe is not None:
+                    self.recipe_clicked.emit(best_recipe)
 
         def setModel(self, model: "BaseWindow.ProductTableModel") -> None:
             """Override setModel to configure delegates from the model."""
@@ -246,7 +291,7 @@ class BaseWindow(QWidget):
             super().__init__(parent)
             self._data: List[BaseWindow.BuildingTableModel.BuildingItem] = []
             self._headers = ["Building", "Total Duration"]
-            
+
             # Create delegates
             self.building_delegate = BuildingColorDelegate(parent)
             self.duration_delegate = GradientColorDelegate(parent)
@@ -365,15 +410,16 @@ class BaseWindow(QWidget):
             self._data: List[BaseWindow.RecipeTableModel.RecipeTableItem] = []
             self._headers = [
                 "Recipe",
-                "Duration",
                 "To buy",
                 "Amount",
+                "Duration",
                 "Profit/hr",
                 "In Progress",
                 "Building",
             ]
-            
+
             # Create delegates
+            self.duration_delegate = GradientColorDelegate(parent)
             self.profit_delegate = GradientColorDelegate(parent)
             self.status_delegate = StatusColorDelegate(parent)
             self.building_delegate = BuildingColorDelegate(parent)
@@ -394,23 +440,23 @@ class BaseWindow(QWidget):
             if role == Qt.ItemDataRole.DisplayRole:
                 if col == 0:  # Recipe name (output)
                     return self._data[row].output_name
-                elif col == 1:  # Duration
-                    return (
-                        f"{self._data[row].duration:.2f}h"
-                        if self._data[row].duration
-                        else "N/A"
-                    )
-                elif col == 2:  # To buy
+                elif col == 1:  # To buy
                     return (
                         self._data[row].amount_to_buy
                         if self._data[row].amount_to_buy
                         else ""
                     )
-                elif col == 3:  # Amount
+                elif col == 2:  # Amount
                     return (
                         self._data[row].amount
                         if self._data[row].amount_over_ordered is None
                         else f"{self._data[row].amount} (+{self._data[row].amount_over_ordered:.1f})"
+                    )
+                elif col == 3:  # Duration
+                    return (
+                        f"{self._data[row].duration:.2f}h"
+                        if self._data[row].duration
+                        else ""
                     )
                 elif col == 4:  # Profit/hr
                     profit_per_hour = self._data[row].profit_per_hour
@@ -429,20 +475,25 @@ class BaseWindow(QWidget):
                         if self._data[row].output_name
                         else ""
                     )
-                elif col == 1:  # Duration - provide raw numeric value for sorting
-                    return (
-                        self._data[row].duration
-                        if self._data[row].duration is not None
-                        else float("inf")
-                    )
-                elif col == 2:  # To buy - provide raw numeric value for sorting
+                elif col == 1:  # To buy - provide raw numeric value for sorting
                     return (
                         self._data[row].amount_to_buy
                         if self._data[row].amount_to_buy
                         else 0
                     )
-                elif col == 3:  # Amount - provide raw numeric value for sorting
+                elif col == 2:  # Amount - provide raw numeric value for sorting
                     return self._data[row].amount
+                elif (
+                    col == 3
+                ):  # Duration - provide raw numeric value for sorting and delegate
+                    # Only show duration for IN_PROGRESS recipes, sort others as if they have infinite duration to push them to the bottom
+                    return (
+                        self._data[row].duration
+                        if self._data[row].duration is not None
+                        and self._data[row].status
+                        == BaseWindow.RecipeStatus.IN_PROGRESS
+                        else float("inf")
+                    )
                 elif col == 4:  # Profit/hr - provide raw numeric value for delegate
                     return self._data[row].profit_per_hour
                 elif col == 5:
@@ -471,15 +522,7 @@ class BaseWindow(QWidget):
 
             if column == 0:  # Recipe name
                 self._data.sort(key=lambda x: x.output_name.lower(), reverse=reverse)
-            elif column == 1:  # Duration
-                self._data.sort(
-                    key=lambda x: (
-                        x.duration is None,
-                        x.duration if x.duration is not None else float("inf"),
-                    ),
-                    reverse=reverse,
-                )
-            elif column == 2:  # To buy
+            elif column == 1:  # To buy
                 self._data.sort(
                     key=lambda x: (
                         x.amount_to_buy is None,
@@ -487,11 +530,19 @@ class BaseWindow(QWidget):
                     ),
                     reverse=reverse,
                 )
-            elif column == 3:  # Amount
+            elif column == 2:  # Amount
                 self._data.sort(
                     key=lambda x: (
                         x.amount is None,
                         x.amount if x.amount is not None else 0,
+                    ),
+                    reverse=reverse,
+                )
+            elif column == 3:  # Duration
+                self._data.sort(
+                    key=lambda x: (
+                        x.duration is None,
+                        x.duration if x.duration is not None else float("inf"),
                     ),
                     reverse=reverse,
                 )
@@ -584,6 +635,7 @@ class BaseWindow(QWidget):
         def update_delegate_ranges(self):
             """Update the min/max ranges for gradient delegates based on all rows."""
             profit_values = []
+            duration_values = []
 
             # Iterate through all rows in the model
             for row_data in self._data:
@@ -594,6 +646,15 @@ class BaseWindow(QWidget):
                     and math.isfinite(profit_val)
                 ):
                     profit_values.append(profit_val)
+
+                duration_val = row_data.duration
+                if (
+                    row_data.status == BaseWindow.RecipeStatus.IN_PROGRESS
+                    and duration_val is not None
+                    and isinstance(duration_val, (int, float))
+                    and math.isfinite(duration_val)
+                ):
+                    duration_values.append(duration_val)
 
             # Update profit delegate range
             if profit_values:
@@ -606,7 +667,20 @@ class BaseWindow(QWidget):
 
             self.profit_delegate.set_value_range(profit_min, profit_max)
 
+            # Update duration delegate range
+            if duration_values:
+                duration_min = min(duration_values)
+                duration_max = max(duration_values)
+                if duration_max == duration_min:
+                    duration_max = duration_min + 1.0
+            else:
+                duration_min = duration_max = 0.0
+
+            self.duration_delegate.set_value_range(duration_min, duration_max)
+
     class RecipeTableView(QTableView):
+        recipe_clicked = Signal(Recipe)
+
         def __init__(self, parent: QWidget):
             super().__init__(parent)
             self.horizontalHeader().setSectionResizeMode(
@@ -614,14 +688,31 @@ class BaseWindow(QWidget):
             )
             self.setSortingEnabled(True)
 
+            self.clicked.connect(self.handle_table_clicked)
+
+        @Slot(QModelIndex)
+        def handle_table_clicked(self, index: QModelIndex) -> None:
+            if not index.isValid():
+                return
+            # Get the recipe from the model
+            source_model = self.model()
+            assert isinstance(source_model, BaseWindow.RecipeTableModel)
+            row = index.row()
+            if row < len(source_model._data):
+                recipe_id = source_model._data[row].recipe_id
+                recipe = GameDataManager.get_recipe_by_id(recipe_id)
+                if recipe:
+                    self.recipe_clicked.emit(recipe)
+
         def setModel(self, model: "BaseWindow.RecipeTableModel") -> None:
             """Override setModel to configure delegates from the model."""
             super().setModel(model)
             if model:
+                self.setItemDelegateForColumn(3, model.duration_delegate)
                 self.setItemDelegateForColumn(4, model.profit_delegate)
                 self.setItemDelegateForColumn(5, model.status_delegate)
                 self.setItemDelegateForColumn(6, model.building_delegate)
-                
+
                 # Connect to model data changes to update delegate ranges
                 model.dataChanged.connect(model.update_delegate_ranges)
                 model.layoutChanged.connect(model.update_delegate_ranges)
@@ -657,12 +748,31 @@ class BaseWindow(QWidget):
         # Create right side with vertical splitter
         right_splitter = QSplitter(Qt.Orientation.Vertical, self)
 
-        # Create Product table (right top)
+        # Create top right section with horizontal splitter for materials table and graph
+        top_right_splitter = QSplitter(Qt.Orientation.Horizontal, self)
+
+        # Create Product table (left side of top right section)
         self.product_table_model = BaseWindow.ProductTableModel(self)
         self.product_table_view = BaseWindow.ProductTableView(self)
         self.product_table_view.setModel(self.product_table_model)
+        self.product_table_view.technology_levels = self.technology_levels
 
-        right_splitter.addWidget(self.product_table_view)
+        top_right_splitter.addWidget(self.product_table_view)
+
+        # Create PriceGraph (right side of top right section)
+        self.price_graph = PriceGraph(self)
+        top_right_splitter.addWidget(self.price_graph)
+
+        # Connect recipe table clicks to update the price graph
+        self.recipe_table_view.recipe_clicked.connect(self.price_graph.plot_recipe)
+        # Connect product table clicks to update the price graph
+        self.product_table_view.recipe_clicked.connect(self.price_graph.plot_recipe)
+
+        # Set stretch factors for top right splitter
+        top_right_splitter.setStretchFactor(0, 1)  # Product table
+        top_right_splitter.setStretchFactor(1, 5)  # Price graph gets more space
+
+        right_splitter.addWidget(top_right_splitter)
 
         # Create Building Summary table (right bottom)
         self.building_summary_model = BaseWindow.BuildingTableModel(self)
@@ -671,15 +781,17 @@ class BaseWindow(QWidget):
 
         right_splitter.addWidget(self.building_summary_view)
 
-        # Set stretch factors for right splitter (product table gets more space)
-        right_splitter.setStretchFactor(0, 4)  # Product table (top)
+        # Set stretch factors for right splitter (top section gets more space)
+        right_splitter.setStretchFactor(0, 4)  # Top section (materials + graph)
         right_splitter.setStretchFactor(1, 1)  # Building summary table (bottom)
 
         splitter.addWidget(right_splitter)
 
         # Set stretch factors (both sides get equal space)
         splitter.setStretchFactor(0, 1)  # Recipe table (left)
-        splitter.setStretchFactor(1, 1)  # Right side (product + building summary)
+        splitter.setStretchFactor(
+            1, 1
+        )  # Right side (materials + graph + building summary)
 
     @Slot(Company)
     def handle_company_loaded(self, company: Company):
@@ -687,6 +799,8 @@ class BaseWindow(QWidget):
             technology.id: technology.level for technology in company.technologies
         }
         self.ships = company.ships
+        # Update technology levels in product table view
+        self.product_table_view.technology_levels = self.technology_levels
 
     @Slot(Base)
     def handle_base_loaded(self, base: Base):
