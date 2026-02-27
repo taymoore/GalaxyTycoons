@@ -265,8 +265,24 @@ class BaseWindow(QWidget):
             )
             self.setSortingEnabled(True)
             self.technology_levels: Dict[int, int] = {}
+            self._column_sort_state: Dict[int, Qt.SortOrder] = {}
 
             self.clicked.connect(self.handle_table_clicked)
+            self.horizontalHeader().sortIndicatorChanged.connect(
+                self._on_sort_indicator_changed
+            )
+
+        def _on_sort_indicator_changed(
+            self, logical_index: int, order: Qt.SortOrder
+        ) -> None:
+            """Override sort behavior to default to descending on first click."""
+            # If this column hasn't been clicked before, force descending order
+            if logical_index not in self._column_sort_state:
+                self._column_sort_state[logical_index] = Qt.SortOrder.DescendingOrder
+                self.sortByColumn(logical_index, Qt.SortOrder.DescendingOrder)
+            else:
+                # Toggle between ascending and descending for subsequent clicks
+                self._column_sort_state[logical_index] = order
 
         @Slot(QModelIndex)
         def handle_table_clicked(self, index: QModelIndex) -> None:
@@ -415,6 +431,23 @@ class BaseWindow(QWidget):
                 QHeaderView.ResizeMode.ResizeToContents
             )
             self.setSortingEnabled(True)
+            self._column_sort_state: Dict[int, Qt.SortOrder] = {}
+
+            self.horizontalHeader().sortIndicatorChanged.connect(
+                self._on_sort_indicator_changed
+            )
+
+        def _on_sort_indicator_changed(
+            self, logical_index: int, order: Qt.SortOrder
+        ) -> None:
+            """Override sort behavior to default to descending on first click."""
+            # If this column hasn't been clicked before, force descending order
+            if logical_index not in self._column_sort_state:
+                self._column_sort_state[logical_index] = Qt.SortOrder.DescendingOrder
+                self.sortByColumn(logical_index, Qt.SortOrder.DescendingOrder)
+            else:
+                # Toggle between ascending and descending for subsequent clicks
+                self._column_sort_state[logical_index] = order
 
         def setModel(self, model: "BaseWindow.BuildingTableModel") -> None:
             """Override setModel to configure delegates from the model."""
@@ -434,12 +467,22 @@ class BaseWindow(QWidget):
             amount: Optional[int]
             amount_over_ordered: Optional[float] = None
             profit_per_hour: Optional[float] = None
-            price_delta: Optional[float] = None  # Price delta from average
+            current_output_price: Optional[float] = None
+            average_output_price: Optional[float] = None
             building_name: Optional[str] = None
             status: "BaseWindow.RecipeStatus"
             duration: Optional[float] = (
                 None  # Duration in hours, calculated from recipe time and building speed
             )
+
+            @property
+            def price_delta(self) -> Optional[float]:
+                if (
+                    self.current_output_price is not None
+                    and self.average_output_price is not None
+                ):
+                    return self.current_output_price - self.average_output_price
+                return None
 
         def __init__(self, parent: QWidget):
             super().__init__(parent)
@@ -504,9 +547,18 @@ class BaseWindow(QWidget):
                     return "N/A"
                 elif col == 5:  # Price Δ
                     price_delta = self._data[row].price_delta
-                    if price_delta is not None:
-                        return f"{price_delta:+,.2f}"
-                    return "0.00"
+                    average_price = self._data[row].average_output_price
+                    if (
+                        price_delta is not None
+                        and average_price is not None
+                        and average_price != 0
+                    ):
+                        return (
+                            f"{price_delta / average_price:+.1%} ({price_delta / 100:+.2f})"
+                            if price_delta != 0
+                            else "0.00"
+                        )
+                    return "N/A"
                 elif col == 6:  # In progress
                     return self._data[row].status.name.replace("_", " ").title()
                 elif col == 7:  # Building name
@@ -541,7 +593,13 @@ class BaseWindow(QWidget):
                 elif col == 4:  # Profit/hr - provide raw numeric value for delegate
                     return self._data[row].profit_per_hour
                 elif col == 5:  # Price Δ - provide raw numeric value for delegate
-                    return self._data[row].price_delta
+                    return (
+                        self._data[row].price_delta
+                        / self._data[row].average_output_price
+                        if self._data[row].price_delta is not None
+                        and self._data[row].average_output_price
+                        else None
+                    )
                 elif col == 6:
                     return self._data[row].status.value
                 elif col == 7:
@@ -657,13 +715,18 @@ class BaseWindow(QWidget):
             elif column == 5:  # Price Δ
                 self._data.sort(
                     key=lambda x: (
-                        x.price_delta is None,
-                        (x.price_delta if x.price_delta is not None else 0.0),
+                        x.price_delta is None and x.average_output_price is not None,
+                        (
+                            x.price_delta / x.average_output_price
+                            if x.price_delta is not None
+                            and x.average_output_price is not None
+                            else float("-inf")
+                        ),
                     ),
                     reverse=reverse,
                 )
             elif column == 6:  # In Progress (status)
-                self._data.sort(key=lambda x: x.status.lower(), reverse=reverse)
+                self._data.sort(key=lambda x: x.status.name.lower(), reverse=reverse)
             elif column == 7:  # Building name
                 self._data.sort(key=lambda x: x.building_name.lower(), reverse=reverse)
 
@@ -718,14 +781,13 @@ class BaseWindow(QWidget):
                     else:
                         recipe_item.profit_per_hour = None
 
-                if recipe_item.price_delta is None:
-                    # Calculate price delta (current_price - average_price)
-                    listing = Exchange.get_listing(recipe.output.id)
-                    recipe_item.price_delta = (
-                        (listing.current_price - listing.average_price) / 100
-                        if listing
-                        else 0.0
-                    )
+                listing = Exchange.listings.get(recipe.output.id)
+                recipe_item.current_output_price = (
+                    listing.current_price if listing else None
+                )
+                recipe_item.average_output_price = (
+                    listing.average_price if listing else None
+                )
 
                 self._data.append(recipe_item)
 
@@ -770,7 +832,12 @@ class BaseWindow(QWidget):
                 ):
                     duration_values.append(duration_val)
 
-                price_delta_val = row_data.price_delta
+                price_delta_val = (
+                    row_data.price_delta / row_data.average_output_price
+                    if row_data.price_delta is not None
+                    and row_data.average_output_price
+                    else None
+                )
                 if (
                     price_delta_val is not None
                     and isinstance(price_delta_val, (int, float))
@@ -820,8 +887,32 @@ class BaseWindow(QWidget):
                 QHeaderView.ResizeMode.ResizeToContents
             )
             self.setSortingEnabled(True)
+            self._column_sort_state: Dict[int, Qt.SortOrder] = {}
 
             self.clicked.connect(self.handle_table_clicked)
+            self.horizontalHeader().sortIndicatorChanged.connect(
+                self._on_sort_indicator_changed
+            )
+
+        def _on_sort_indicator_changed(
+            self, logical_index: int, order: Qt.SortOrder
+        ) -> None:
+            """Override sort behavior to default to descending on first click.
+            Profit/hr (column 4) and Price Δ (column 5) always sort descending."""
+            # Columns that should always sort descending: Profit/hr (4) and Price Δ (5)
+            always_descending_columns = {4, 5}
+
+            if logical_index in always_descending_columns:
+                # Always force descending order for these columns
+                self._column_sort_state[logical_index] = Qt.SortOrder.DescendingOrder
+                self.sortByColumn(logical_index, Qt.SortOrder.DescendingOrder)
+            elif logical_index not in self._column_sort_state:
+                # If this column hasn't been clicked before, force descending order
+                self._column_sort_state[logical_index] = Qt.SortOrder.DescendingOrder
+                self.sortByColumn(logical_index, Qt.SortOrder.DescendingOrder)
+            else:
+                # Toggle between ascending and descending for subsequent clicks
+                self._column_sort_state[logical_index] = order
 
         @Slot(QModelIndex)
         def handle_table_clicked(self, index: QModelIndex) -> None:
@@ -919,7 +1010,7 @@ class BaseWindow(QWidget):
         # Set stretch factors for main splitter
         main_splitter.setStretchFactor(0, 2)  # Left side (recipe + building summary)
         main_splitter.setStretchFactor(1, 1)  # Product table (center)
-        main_splitter.setStretchFactor(2, 3)  # Price graph (right) gets most space
+        main_splitter.setStretchFactor(2, 5)  # Price graph (right) gets most space
 
     @Slot(int, object)
     def handle_to_buy_changed(self, recipe_id: int, amount: int) -> None:
