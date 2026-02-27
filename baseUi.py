@@ -88,12 +88,22 @@ _logger = logging.getLogger(__name__)
 class IntegerDelegate(QStyledItemDelegate):
     """Delegate that restricts input to non-negative integers only. Empty string is treated as 0."""
 
+    class AllowEmptyIntValidator(QIntValidator):
+        def validate(
+            self, input_str: str, pos: int
+        ) -> Tuple[QIntValidator.State, str, int]:
+            if input_str == "":
+                return QIntValidator.State.Acceptable
+            return super().validate(input_str, pos)
+
     def createEditor(
         self, parent: QWidget, option: QStyleOptionViewItem, index: QModelIndex
     ) -> QWidget:
         """Create a line edit with integer validation."""
         editor = QLineEdit(parent)
-        validator = QIntValidator(0, 2147483647, editor)  # Non-negative integers
+        validator = IntegerDelegate.AllowEmptyIntValidator(
+            0, 2147483647, editor
+        )  # Non-negative integers
         editor.setValidator(validator)
         return editor
 
@@ -974,12 +984,35 @@ class BaseWindow(QWidget):
 
         left_splitter.addWidget(self.recipe_table_view)
 
+        # Create bottom left splitter for building summary and control panel
+        bottom_left_splitter = QSplitter(Qt.Orientation.Horizontal, self)
+
+        left_splitter.addWidget(bottom_left_splitter)
+
         # Create Building Summary table (bottom-left)
         self.building_summary_model = BaseWindow.BuildingTableModel(self)
         self.building_summary_view = BaseWindow.BuildingTableView(self)
         self.building_summary_view.setModel(self.building_summary_model)
 
-        left_splitter.addWidget(self.building_summary_view)
+        bottom_left_splitter.addWidget(self.building_summary_view)
+
+        # Create Control Panel
+        control_widget = QWidget(self)
+        control_layout = QVBoxLayout()
+
+        # Create total-weight label
+        self.total_weight_label = QLabel("Total weight: N/A", self)
+        control_layout.addWidget(self.total_weight_label)
+
+        control_layout.addStretch()  # Push controls to the top
+
+        # Set the layout on the control widget and add to splitter
+        control_widget.setLayout(control_layout)
+        bottom_left_splitter.addWidget(control_widget)
+
+        # Set stretch factors for bottom left splitter
+        bottom_left_splitter.setStretchFactor(0, 2)  # Building summary gets more space
+        bottom_left_splitter.setStretchFactor(1, 1)  # Control panel
 
         # Set stretch factors for left splitter
         left_splitter.setStretchFactor(0, 4)  # Recipe table gets more space
@@ -1012,6 +1045,27 @@ class BaseWindow(QWidget):
         main_splitter.setStretchFactor(1, 1)  # Product table (center)
         main_splitter.setStretchFactor(2, 5)  # Price graph (right) gets most space
 
+    @Slot()
+    def calculate_total_weight(self) -> float:
+        """Calculate and update the total weight of materials to buy."""
+        total_weight = 0.0
+        for item in self.recipe_table_model._data:
+            if item.amount_to_buy and item.amount_to_buy > 0:
+                recipe = GameDataManager.get_recipe_by_id(item.recipe_id)
+                if recipe:
+                    for consumable in recipe.inputs:
+                        material = GameDataManager.get_material_by_id(consumable.id)
+                        if material:
+                            total_weight += (
+                                material.weight * consumable.am * item.amount_to_buy
+                            )
+
+        if total_weight > 0:
+            self.total_weight_label.setText(f"Total weight: {total_weight:.2f}")
+        else:
+            self.total_weight_label.setText("Total weight: N/A")
+        return total_weight
+
     @Slot(int, object)
     def handle_to_buy_changed(self, recipe_id: int, amount: int) -> None:
         """
@@ -1021,23 +1075,7 @@ class BaseWindow(QWidget):
             recipe_id: The ID of the recipe whose 'To buy' value changed
             amount: The new amount value (empty string/None is treated as 0)
         """
-        # Get recipe information
-        recipe = GameDataManager.get_recipe_by_id(recipe_id)
-        if recipe:
-            recipe_name = GameDataManager.get_item_name(recipe.output.id)
-            _logger.info(
-                f"'To buy' set to {amount} for recipe: {recipe_name} (ID: {recipe_id})"
-            )
-        else:
-            _logger.warning(f"'To buy' changed for unknown recipe ID: {recipe_id}")
-
-        # Add your custom logic here
-        # For example, you could:
-        # - Update order quantities
-        # - Trigger calculations
-        # - Update other UI elements
-        # - Save to database/API
-        pass
+        self.calculate_total_weight()
 
     @Slot(Company)
     def handle_company_loaded(self, company: Company):
