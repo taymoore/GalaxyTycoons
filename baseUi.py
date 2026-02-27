@@ -26,6 +26,7 @@ from PySide6.QtGui import (
     QBrush,
     QCloseEvent,
     QColor,
+    QIntValidator,
     QPainter,
     QPalette,
     QTextCharFormat,
@@ -40,6 +41,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QSizePolicy,
     QSlider,
     QSplitter,
@@ -81,6 +83,37 @@ from utils import (
 DAYS_CONSUMABLE_BUFFER = 2
 
 _logger = logging.getLogger(__name__)
+
+
+class IntegerDelegate(QStyledItemDelegate):
+    """Delegate that restricts input to non-negative integers only. Empty string is treated as 0."""
+
+    def createEditor(
+        self, parent: QWidget, option: QStyleOptionViewItem, index: QModelIndex
+    ) -> QWidget:
+        """Create a line edit with integer validation."""
+        editor = QLineEdit(parent)
+        validator = QIntValidator(0, 2147483647, editor)  # Non-negative integers
+        editor.setValidator(validator)
+        return editor
+
+    def setEditorData(self, editor: QWidget, index: QModelIndex) -> None:
+        """Set the editor's data from the model."""
+        if isinstance(editor, QLineEdit):
+            value = index.data(Qt.ItemDataRole.DisplayRole)
+            editor.setText(str(value) if value else "")
+
+    def setModelData(
+        self, editor: QWidget, model: QAbstractTableModel, index: QModelIndex
+    ) -> None:
+        """Set the model's data from the editor. Empty string is treated as 0."""
+        if isinstance(editor, QLineEdit):
+            text = editor.text().strip()
+            if text:
+                model.setData(index, int(text), Qt.ItemDataRole.EditRole)
+            else:
+                # Empty string is treated as 0
+                model.setData(index, 0, Qt.ItemDataRole.EditRole)
 
 
 class BaseWindow(QWidget):
@@ -391,6 +424,8 @@ class BaseWindow(QWidget):
                 self.setItemDelegateForColumn(1, model.duration_delegate)
 
     class RecipeTableModel(QAbstractTableModel):
+        # Signal emitted when 'To buy' value changes: (recipe_id, new_value)
+        to_buy_changed = Signal(int, object)
 
         class RecipeTableItem(BaseModel):
             recipe_id: int
@@ -399,6 +434,7 @@ class BaseWindow(QWidget):
             amount: Optional[int]
             amount_over_ordered: Optional[float] = None
             profit_per_hour: Optional[float] = None
+            price_delta: Optional[float] = None  # Price delta from average
             building_name: Optional[str] = None
             status: "BaseWindow.RecipeStatus"
             duration: Optional[float] = (
@@ -414,13 +450,16 @@ class BaseWindow(QWidget):
                 "Amount",
                 "Duration",
                 "Profit/hr",
+                "Price Δ",
                 "In Progress",
                 "Building",
             ]
 
             # Create delegates
+            self.integer_delegate = IntegerDelegate(parent)
             self.duration_delegate = GradientColorDelegate(parent)
             self.profit_delegate = GradientColorDelegate(parent)
+            self.price_delta_delegate = GradientColorDelegate(parent)
             self.status_delegate = StatusColorDelegate(parent)
             self.building_delegate = BuildingColorDelegate(parent)
 
@@ -463,9 +502,14 @@ class BaseWindow(QWidget):
                     if profit_per_hour is not None:
                         return f"{profit_per_hour:,.0f}"
                     return "N/A"
-                elif col == 5:  # In progress
+                elif col == 5:  # Price Δ
+                    price_delta = self._data[row].price_delta
+                    if price_delta is not None:
+                        return f"{price_delta:+,.2f}"
+                    return "0.00"
+                elif col == 6:  # In progress
                     return self._data[row].status.name.replace("_", " ").title()
-                elif col == 6:  # Building name
+                elif col == 7:  # Building name
                     return self._data[row].building_name
 
             elif role == Qt.ItemDataRole.UserRole:
@@ -496,9 +540,11 @@ class BaseWindow(QWidget):
                     )
                 elif col == 4:  # Profit/hr - provide raw numeric value for delegate
                     return self._data[row].profit_per_hour
-                elif col == 5:
-                    return self._data[row].status.value
+                elif col == 5:  # Price Δ - provide raw numeric value for delegate
+                    return self._data[row].price_delta
                 elif col == 6:
+                    return self._data[row].status.value
+                elif col == 7:
                     return self._data[row].building_name
 
             return None
@@ -513,6 +559,56 @@ class BaseWindow(QWidget):
                 if orientation == Qt.Orientation.Horizontal:
                     return self._headers[section]
             return None
+
+        def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+            """Return item flags, making column 1 (To buy) editable."""
+            if not index.isValid():
+                return Qt.ItemFlag.NoItemFlags
+
+            default_flags = super().flags(index)
+
+            # Make column 1 (To buy) editable
+            if index.column() == 1:
+                return default_flags | Qt.ItemFlag.ItemIsEditable
+
+            return default_flags
+
+        def setData(
+            self, index: QModelIndex, value, role: int = Qt.ItemDataRole.EditRole
+        ) -> bool:
+            """Handle data changes for editable cells. Empty string is treated as 0."""
+            if not index.isValid() or role != Qt.ItemDataRole.EditRole:
+                return False
+
+            row = index.row()
+            col = index.column()
+
+            # Only allow editing column 1 (To buy)
+            if col == 1:
+                # Convert to integer, handle empty strings and invalid input
+                try:
+                    if value == "" or value is None:
+                        # Empty string or None is treated as 0
+                        int_value = 0
+                    else:
+                        int_value = int(value)
+                        # Ensure non-negative values
+                        if int_value < 0:
+                            return False
+                except (ValueError, TypeError):
+                    return False
+
+                # Update the data
+                self._data[row].amount_to_buy = int_value
+                self.dataChanged.emit(index, index, [role])
+
+                # Emit signal with recipe_id and new value
+                recipe_id = self._data[row].recipe_id
+                self.to_buy_changed.emit(recipe_id, int_value)
+
+                return True
+
+            return False
 
         def sort(self, column: int, order: Qt.SortOrder = Qt.SortOrder.AscendingOrder):
             """Sort table by given column and order."""
@@ -558,9 +654,17 @@ class BaseWindow(QWidget):
                     ),
                     reverse=reverse,
                 )
-            elif column == 5:  # In Progress (status)
+            elif column == 5:  # Price Δ
+                self._data.sort(
+                    key=lambda x: (
+                        x.price_delta is None,
+                        (x.price_delta if x.price_delta is not None else 0.0),
+                    ),
+                    reverse=reverse,
+                )
+            elif column == 6:  # In Progress (status)
                 self._data.sort(key=lambda x: x.status.lower(), reverse=reverse)
-            elif column == 6:  # Building name
+            elif column == 7:  # Building name
                 self._data.sort(key=lambda x: x.building_name.lower(), reverse=reverse)
 
             self.layoutChanged.emit()
@@ -614,6 +718,15 @@ class BaseWindow(QWidget):
                     else:
                         recipe_item.profit_per_hour = None
 
+                if recipe_item.price_delta is None:
+                    # Calculate price delta (current_price - average_price)
+                    listing = Exchange.get_listing(recipe.output.id)
+                    recipe_item.price_delta = (
+                        (listing.current_price - listing.average_price) / 100
+                        if listing
+                        else 0.0
+                    )
+
                 self._data.append(recipe_item)
 
             # Sort by Profit/hr (column 2) descending by default
@@ -636,6 +749,7 @@ class BaseWindow(QWidget):
             """Update the min/max ranges for gradient delegates based on all rows."""
             profit_values = []
             duration_values = []
+            price_delta_values = []
 
             # Iterate through all rows in the model
             for row_data in self._data:
@@ -655,6 +769,14 @@ class BaseWindow(QWidget):
                     and math.isfinite(duration_val)
                 ):
                     duration_values.append(duration_val)
+
+                price_delta_val = row_data.price_delta
+                if (
+                    price_delta_val is not None
+                    and isinstance(price_delta_val, (int, float))
+                    and math.isfinite(price_delta_val)
+                ):
+                    price_delta_values.append(price_delta_val)
 
             # Update profit delegate range
             if profit_values:
@@ -677,6 +799,17 @@ class BaseWindow(QWidget):
                 duration_min = duration_max = 0.0
 
             self.duration_delegate.set_value_range(duration_min, duration_max)
+
+            # Update price delta delegate range
+            if price_delta_values:
+                price_delta_min = min(price_delta_values)
+                price_delta_max = max(price_delta_values)
+                if price_delta_max == price_delta_min:
+                    price_delta_max = price_delta_min + 1.0
+            else:
+                price_delta_min = price_delta_max = 0.0
+
+            self.price_delta_delegate.set_value_range(price_delta_min, price_delta_max)
 
     class RecipeTableView(QTableView):
         recipe_clicked = Signal(Recipe)
@@ -708,10 +841,12 @@ class BaseWindow(QWidget):
             """Override setModel to configure delegates from the model."""
             super().setModel(model)
             if model:
+                self.setItemDelegateForColumn(1, model.integer_delegate)
                 self.setItemDelegateForColumn(3, model.duration_delegate)
                 self.setItemDelegateForColumn(4, model.profit_delegate)
-                self.setItemDelegateForColumn(5, model.status_delegate)
-                self.setItemDelegateForColumn(6, model.building_delegate)
+                self.setItemDelegateForColumn(5, model.price_delta_delegate)
+                self.setItemDelegateForColumn(6, model.status_delegate)
+                self.setItemDelegateForColumn(7, model.building_delegate)
 
                 # Connect to model data changes to update delegate ranges
                 model.dataChanged.connect(model.update_delegate_ranges)
@@ -778,10 +913,40 @@ class BaseWindow(QWidget):
         # Connect product table clicks to update the price graph
         self.product_table_view.recipe_clicked.connect(self.price_graph.plot_recipe)
 
+        # Connect to 'To buy' column changes
+        self.recipe_table_model.to_buy_changed.connect(self.handle_to_buy_changed)
+
         # Set stretch factors for main splitter
         main_splitter.setStretchFactor(0, 2)  # Left side (recipe + building summary)
         main_splitter.setStretchFactor(1, 1)  # Product table (center)
         main_splitter.setStretchFactor(2, 3)  # Price graph (right) gets most space
+
+    @Slot(int, object)
+    def handle_to_buy_changed(self, recipe_id: int, amount: int) -> None:
+        """
+        Handle changes to the 'To buy' column.
+
+        Args:
+            recipe_id: The ID of the recipe whose 'To buy' value changed
+            amount: The new amount value (empty string/None is treated as 0)
+        """
+        # Get recipe information
+        recipe = GameDataManager.get_recipe_by_id(recipe_id)
+        if recipe:
+            recipe_name = GameDataManager.get_item_name(recipe.output.id)
+            _logger.info(
+                f"'To buy' set to {amount} for recipe: {recipe_name} (ID: {recipe_id})"
+            )
+        else:
+            _logger.warning(f"'To buy' changed for unknown recipe ID: {recipe_id}")
+
+        # Add your custom logic here
+        # For example, you could:
+        # - Update order quantities
+        # - Trigger calculations
+        # - Update other UI elements
+        # - Save to database/API
+        pass
 
     @Slot(Company)
     def handle_company_loaded(self, company: Company):
@@ -895,7 +1060,23 @@ class BaseWindow(QWidget):
         self.building_summary_model.set_building_durations(building_durations)
 
         # Find potential recipes that we have materials for but are not currently producing (standby)
-        for recipe in GameDataManager.get().recipes:
+        for recipe in sorted(
+            GameDataManager.get().recipes,
+            key=lambda r: (
+                result[0]
+                if (
+                    result := calculate_profit_and_consumables(
+                        r,
+                        self.technology_levels.get(
+                            GameDataManager.get_building(r.producedIn).specialization, 0
+                        ),
+                    )
+                )
+                is not None
+                else float("-inf")
+            ),
+            reverse=True,
+        ):
             if recipe.producedIn not in building_types:
                 continue
             tech_level = self.technology_levels.get(
@@ -932,24 +1113,7 @@ class BaseWindow(QWidget):
             materials_dict.pop(mat_id)
 
         # Add potential recipes
-        # TODO: Sort by most profitable to least profitable potential recipes instead of just adding in game data order
-        for recipe in sorted(
-            GameDataManager.get().recipes,
-            key=lambda r: (
-                result[0]
-                if (
-                    result := calculate_profit_and_consumables(
-                        r,
-                        self.technology_levels.get(
-                            GameDataManager.get_building(r.producedIn).specialization, 0
-                        ),
-                    )
-                )
-                is not None
-                else float("-inf")
-            ),
-            reverse=True,
-        ):
+        for recipe in GameDataManager.get().recipes:
             # Skip recipes already added
             if any(recipe.id == r.recipe_id for r in recipes):
                 continue
