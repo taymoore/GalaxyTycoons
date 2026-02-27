@@ -174,9 +174,13 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(self.average_price_action)
 
         # Calculate Purchase
-        calculate_purchase_action = QAction("Calculate", self)
-        menubar.addAction(calculate_purchase_action)
-        calculate_purchase_action.setVisible(False)  # Hide until implemented
+        self.refresh_data_action = QAction("Refresh", self)
+        self.refresh_data_action.triggered.connect(self._refresh_data)
+        menubar.addAction(self.refresh_data_action)
+        # refresh_data_action.setVisible(False)  # Hide until implemented
+
+    def _refresh_data(self) -> None:
+        self.company_data_manager.fetch_company(force=True)
 
     def _copy_listings_to_clipboard(self) -> None:
         """Copy all listings to clipboard in tab-separated format for Excel."""

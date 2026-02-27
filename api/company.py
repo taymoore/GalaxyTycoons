@@ -44,10 +44,12 @@ class CompanyDataManager(QObject):
         self.company = None
 
     @Slot()
-    def fetch_company(self) -> Optional[Company]:
+    def fetch_company(self, force=False) -> Optional[Company]:
         """Fetch company data on demand."""
         if (
-            self.fetch_company_timestamp
+            force is False
+            and self.company is not None
+            and self.fetch_company_timestamp
             and datetime.now() - self.fetch_company_timestamp
             < timedelta(seconds=FETCH_COMPANY_TIMEOUT_SECONDS)
         ):
@@ -68,7 +70,7 @@ class CompanyDataManager(QObject):
                 _logger.info(f"Fetched company data at {self.fetch_company_timestamp}")
                 self.company_loaded.emit(self.company)
                 for base in self.company.bases:
-                    base = self.fetch_base(base.id)
+                    base = self.fetch_base(base.id, force)
         except Exception as exc:  # noqa: BLE001
             _logger.error("Error fetching company data: %s", exc)
             self.error.emit(str(exc))
@@ -76,10 +78,11 @@ class CompanyDataManager(QObject):
         return self.company
 
     @Slot(int)
-    def fetch_base(self, id: int) -> Optional[Base]:
+    def fetch_base(self, id: int, force=False) -> Optional[Base]:
         """Fetch base data on demand."""
         if (
-            id in self.base_dict
+            force is False
+            and id in self.base_dict
             and self.fetch_base_timestamp.get(id)
             and datetime.now() - self.fetch_base_timestamp[id]
             < timedelta(seconds=FETCH_COMPANY_TIMEOUT_SECONDS)
