@@ -737,8 +737,23 @@ class BaseWindow(QWidget):
                 )
             elif column == 6:  # In Progress (status)
                 self._data.sort(key=lambda x: x.status.name.lower(), reverse=reverse)
-            elif column == 7:  # Building name
-                self._data.sort(key=lambda x: x.building_name.lower(), reverse=reverse)
+            elif column == 7:  # Building name - use profit as secondary sort
+                self._data.sort(
+                    key=lambda x: (
+                        x.building_name.lower(),
+                        x.profit_per_hour is None,
+                        (
+                            -x.profit_per_hour
+                            if x.profit_per_hour is not None
+                            else float("inf")
+                        ) if not reverse else (
+                            x.profit_per_hour
+                            if x.profit_per_hour is not None
+                            else float("-inf")
+                        ),
+                    ),
+                    reverse=reverse,
+                )
 
             self.layoutChanged.emit()
 
@@ -801,17 +816,17 @@ class BaseWindow(QWidget):
 
                 self._data.append(recipe_item)
 
-            # Sort by Profit/hr (column 2) descending by default
+            # Sort by Building (ascending) then Profit/hr (descending) by default
             self._data.sort(
                 key=lambda x: (
+                    x.building_name.lower() if x.building_name else "",
                     x.profit_per_hour is None,
                     (
-                        x.profit_per_hour
+                        -x.profit_per_hour
                         if x.profit_per_hour is not None
-                        else float("-inf")
+                        else float("inf")
                     ),
-                ),
-                reverse=True,
+                )
             )
 
             self.endResetModel()
@@ -981,6 +996,8 @@ class BaseWindow(QWidget):
         self.recipe_table_model = BaseWindow.RecipeTableModel(self)
         self.recipe_table_view = BaseWindow.RecipeTableView(self)
         self.recipe_table_view.setModel(self.recipe_table_model)
+        # Set initial sort indicator on Building column (column 7)
+        self.recipe_table_view.sortByColumn(7, Qt.SortOrder.AscendingOrder)
 
         left_splitter.addWidget(self.recipe_table_view)
 
@@ -1270,7 +1287,11 @@ class BaseWindow(QWidget):
         self.product_table_model.set_materials(materials_dict)
 
         # Update tab name with production time
-        tab_name = f"{base.name} - {min(building_durations.values()):.1f}h"
+        tab_name = (
+            f"{base.name} - {min(building_durations.values()):.1f}h"
+            if building_durations
+            else base.name
+        )
         self.update_tab_name_signal.emit(base.id, tab_name)
 
     @staticmethod
