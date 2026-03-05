@@ -227,17 +227,14 @@ class ConfigurationWindow(QWidget):
                 if result is None:
                     return
 
-                recipe_name, profit, consumables_preferred, consumables_rejected = (
-                    result
-                )
-
+                recipe, profit, consumables_preferred, consumables_rejected = result
                 consumables_text = format_consumables(
                     consumables_preferred, consumables_rejected
                 )
 
                 # Update the items
                 if recipe_item:
-                    recipe_item.setText(recipe_name)
+                    recipe_item.setText(GameDataManager.get_item_name(recipe.output.id))
                 if profit_item:
                     profit_item.setText(f"{profit:,.2f}")
                 if consumables_item:
@@ -285,10 +282,16 @@ class ConfigurationWindow(QWidget):
 
                             if building_type and building_level:
                                 # Store persistent model indexes instead of QStandardItem references
-                                recipe_index = QPersistentModelIndex(self.indexFromItem(parent_item.child(child_row, 2)))
-                                profit_index = QPersistentModelIndex(self.indexFromItem(parent_item.child(child_row, 3)))
-                                consumables_index = QPersistentModelIndex(self.indexFromItem(parent_item.child(child_row, 4)))
-                                
+                                recipe_index = QPersistentModelIndex(
+                                    self.indexFromItem(parent_item.child(child_row, 2))
+                                )
+                                profit_index = QPersistentModelIndex(
+                                    self.indexFromItem(parent_item.child(child_row, 3))
+                                )
+                                consumables_index = QPersistentModelIndex(
+                                    self.indexFromItem(parent_item.child(child_row, 4))
+                                )
+
                                 items_to_recalculate.append(
                                     (
                                         building_type,
@@ -315,20 +318,24 @@ class ConfigurationWindow(QWidget):
                         consumables_index,
                         planet_id,
                     ) = items_to_recalculate[i]
-                    
+
                     # Check if indexes are still valid before accessing items
-                    if not recipe_index.isValid() or not profit_index.isValid() or not consumables_index.isValid():
+                    if (
+                        not recipe_index.isValid()
+                        or not profit_index.isValid()
+                        or not consumables_index.isValid()
+                    ):
                         continue
-                    
+
                     # Get items from persistent indexes
                     child_recipe = self.itemFromIndex(recipe_index)
                     child_profit = self.itemFromIndex(profit_index)
                     child_consumables = self.itemFromIndex(consumables_index)
-                    
+
                     # Double-check items are not None
                     if not child_recipe or not child_profit or not child_consumables:
                         continue
-                    
+
                     self._update_best_recipe_for_building(
                         building_type,
                         child_recipe,

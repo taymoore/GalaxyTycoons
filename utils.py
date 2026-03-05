@@ -1,3 +1,4 @@
+# TODO: review the profit calculation as I don't think it takes into account depreciation of the buildings, especially if they're over level 1
 from PySide6.QtGui import QColor
 from PySide6.QtCore import Qt, QModelIndex, QPointF, Slot
 from PySide6.QtWidgets import QStyledItemDelegate, QStyle
@@ -16,6 +17,7 @@ import pyqtgraph as pg
 from api.gameData import GameDataManager
 from api.exchange import Exchange
 from api.models.gameData import (
+    Building,
     MaterialAmount,
     Planet,
     Recipe,
@@ -241,9 +243,9 @@ class StatusColorDelegate(QStyledItemDelegate):
         super().__init__(parent)
         # Define status colors
         self.status_colors = {
-            "IN PROGRESS": QColor(0, 200, 0),      # Green
-            "STANDBY": QColor(255, 165, 0),        # Orange
-            "NO MATERIALS": QColor(255, 0, 0),     # Red
+            "IN PROGRESS": QColor(0, 200, 0),  # Green
+            "STANDBY": QColor(255, 165, 0),  # Orange
+            "NO MATERIALS": QColor(255, 0, 0),  # Red
         }
 
     def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
@@ -255,14 +257,14 @@ class StatusColorDelegate(QStyledItemDelegate):
 
         # Get status text (normalize to uppercase for comparison)
         status_text = str(text).upper()
-        
+
         # Find matching color
         color = None
         for status_key, status_color in self.status_colors.items():
             if status_key in status_text:
                 color = status_color
                 break
-        
+
         if color is None:
             return super().paint(painter, option, index)
 
@@ -402,7 +404,7 @@ def align_add(
 
 
 def calculate_profit_and_consumables(
-    recipe, tech_level: int = 0, abundance: float = 1.0
+    recipe: Recipe, tech_level: int = 0, abundance: float = 1.0
 ) -> None | tuple[float, tuple[int, ...], tuple[int, ...]]:
     """
     Calculate the profit per hour and the preferred consumable combination for a given recipe.
@@ -744,7 +746,7 @@ def find_best_recipe_for_technology(
 
 def find_best_recipe_for_building(
     building_id: int, tech_level: int = None, planet: Optional[Planet] = None
-) -> None | Tuple[str, float, tuple[int, ...], tuple[int, ...]]:
+) -> None | Tuple[Recipe, float, tuple[int, ...], tuple[int, ...]]:
     """
     Find the best recipe (highest profit/hr) for a given building and tech level.
 
@@ -754,7 +756,7 @@ def find_best_recipe_for_building(
         planet: Optional planet for resource abundance consideration
 
     Returns:
-        None | tuple[str, float, tuple[int, ...], tuple[int, ...]]: Recipe name, profit/hr, preferred consumables, and rejected consumables
+        None | tuple[Recipe, float, tuple[int, ...], tuple[int, ...]]: Recipe, profit/hr, preferred consumables, and rejected consumables
     """
     try:
         game_data = GameDataManager.get()
@@ -810,7 +812,7 @@ def find_best_recipe_for_building(
             return None
 
         return (
-            GameDataManager.get_item_name(best_recipe.output.id),
+            best_recipe,
             best_profit,
             best_preferred,
             best_rejected,
@@ -876,7 +878,7 @@ def calculate_research_cost(
 
 class PriceGraph(pg.PlotWidget):
     """Reusable price graph widget for displaying recipe profit and quantity data over time."""
-    
+
     class FmtAxesItem(pg.AxisItem):
         def tickStrings(self, values, scale, spacing):
             return [f"{v:,.0f}" for v in values]
@@ -949,14 +951,11 @@ class PriceGraph(pg.PlotWidget):
         else:
             mask = vb.state["mouseEnabled"][:]
         s = 1.02 ** (
-            (ev.angleDelta().y() - ev.angleDelta().x())
-            * vb.state["wheelScaleFactor"]
+            (ev.angleDelta().y() - ev.angleDelta().x()) * vb.state["wheelScaleFactor"]
         )  # actual scaling factor
         s = [(None if m is False else s) for m in mask]
         center = pg.Point(
-            pg.functions.invertQTransform(vb.childGroup.transform()).map(
-                ev.position()
-            )
+            pg.functions.invertQTransform(vb.childGroup.transform()).map(ev.position())
         )
 
         vb._resetTarget()
@@ -1037,9 +1036,7 @@ class PriceGraph(pg.PlotWidget):
                 plot_item2 = pg.PlotDataItem(
                     x=np.asarray(qty_available_index),
                     y=np.asarray(qty_available_data),
-                    pen=pg.mkPen(
-                        color="#0088ff", width=1, style=Qt.PenStyle.DashLine
-                    ),
+                    pen=pg.mkPen(color="#0088ff", width=1, style=Qt.PenStyle.DashLine),
                     name="Total Qty Available",
                 )
                 self.p2.addItem(plot_item2)
@@ -1111,9 +1108,7 @@ class PriceGraph(pg.PlotWidget):
                 plot_item3 = pg.PlotDataItem(
                     x=np.asarray(qty_sold_index),
                     y=np.asarray(qty_sold_data),
-                    pen=pg.mkPen(
-                        color="#ff8800", width=1, style=Qt.PenStyle.DashLine
-                    ),
+                    pen=pg.mkPen(color="#ff8800", width=1, style=Qt.PenStyle.DashLine),
                     name="Qty Sold Daily",
                 )
                 self.p3.addItem(plot_item3)
@@ -1190,8 +1185,7 @@ class PriceGraph(pg.PlotWidget):
                 if input_average_price.empty:
                     continue
                 input_average_price.index = (
-                    pd.to_datetime(input_average_price.index).astype("int64")
-                    // 10**9
+                    pd.to_datetime(input_average_price.index).astype("int64") // 10**9
                 )
                 input_average_price["price"] = (
                     input_average_price["average_price"]
@@ -1203,8 +1197,7 @@ class PriceGraph(pg.PlotWidget):
                 if input_current_price.empty:
                     continue
                 input_current_price.index = (
-                    pd.to_datetime(input_current_price.index).astype("int64")
-                    // 10**9
+                    pd.to_datetime(input_current_price.index).astype("int64") // 10**9
                 )
                 input_current_price["price"] = (
                     input_current_price["current_price"]
@@ -1327,3 +1320,58 @@ class PriceGraph(pg.PlotWidget):
         )
         view_point = self.p1.vb.mapViewToScene(pg.Point(nearest_x, nearest_y))
         self.label.setPos(view_point - self.label.boundingRect().topRight())
+
+
+def calculate_construction_cost(
+    building: Building, current_level: int | None = None
+) -> float:
+    # Level is the current level, not what level you're building to. So level 0 means building from scratch, level 1 means upgrading from level 1 to level 2, etc.
+    # Calculate building cost from construction materials
+    if current_level is None or current_level == 0:
+        growth_factor = 1.0
+    elif current_level < 0:
+        _logger.warning(
+            f"Invalid building level {current_level} for {building.name} ({building.id}). Level cannot be negative."
+        )
+        growth_factor = 1.0
+    elif current_level < 9:
+        growth_factor = 0.1 * current_level + 1.07**current_level
+    else:
+        growth_factor = (
+            0.7
+            + (1.07**7)
+            + ((current_level - 6) ** 1.03)
+            - (0.95 * (current_level - 6))
+        )
+    cost = 0
+    for material in building.constructionMaterials:
+        material_listing = Exchange.get_listing(material.id)
+        material_price = (
+            material_listing.average_price
+            if use_average_price
+            else material_listing.current_price
+        )
+        material_amount = math.ceil(material.am * growth_factor)
+        if material_listing and material_price > 0:
+            cost += (material_price * material_amount) / 100  # Convert cents to dollars
+        else:
+            _logger.warning(
+                f"Excluding building {building.name} due to missing listing for material ID {material.id}"
+            )
+            continue
+
+    if cost <= 0:
+        _logger.warning(
+            f"Excluding building {building.name} due to invalid construction cost"
+        )
+    return cost
+
+
+def calculate_maintenance_cost(
+    recipe: Recipe, building: Building, level: int = 1
+) -> float | None:
+    # Calculate building maintenance cost
+    # Buildings degrade over 40 days of use, so maintainance cost is 1/40th of construction cost per day, or 1/960th per hour
+    # Returns the maintainance cost per hour in dollars
+    construction_cost = calculate_construction_cost(building, level - 1)
+    return construction_cost / 960 if construction_cost > 0 else None

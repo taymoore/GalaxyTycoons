@@ -127,6 +127,7 @@ class ValueRecalculationWorker(QObject):
             self.finished.emit()
 
 
+
 class RecipeWindow(QWidget):
     class RecipeTableModel(QAbstractTableModel):
 

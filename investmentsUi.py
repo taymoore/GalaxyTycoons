@@ -31,9 +31,11 @@ from settings import Settings
 import utils
 from utils import (
     align_add,
+    calculate_maintenance_cost,
     calculate_research_cost,
     find_best_recipe_for_building,
     find_best_recipe_for_technology,
+    calculate_construction_cost,
 )
 from api.gameData import GameDataManager
 from api.models.gameData import Recipe, Specialization, Building, WorkerType
@@ -188,43 +190,8 @@ class InvestmentsWindow(QWidget):
                         def _calculate_investment_cost(
                             building: Building, level: int | None = None
                         ) -> float:
-                            def _calculate_construction_cost(
-                                building: Building, level: int | None = None
-                            ) -> float:
-                                # Calculate building cost from construction materials
-                                growth_factor = (
-                                    0.1 * level + 1.07**level
-                                    if level and level >= 0
-                                    else 1.0
-                                )
-                                cost = 0
-                                for material in building.constructionMaterials:
-                                    material_listing = Exchange.get_listing(material.id)
-                                    material_price = (
-                                        material_listing.average_price
-                                        if utils.use_average_price
-                                        else material_listing.current_price
-                                    )
-                                    material_amount = math.ceil(
-                                        material.am * growth_factor
-                                    )
-                                    if material_listing and material_price > 0:
-                                        cost += (
-                                            material_price * material_amount
-                                        ) / 100  # Convert cents to dollars
-                                    else:
-                                        _logger.warning(
-                                            f"Excluding building {building.name} due to missing listing for material ID {material.id}"
-                                        )
-                                        continue
 
-                                if cost <= 0:
-                                    _logger.warning(
-                                        f"Excluding building {building.name} due to invalid construction cost"
-                                    )
-                                return cost
-
-                            cost = _calculate_construction_cost(building, level)
+                            cost = calculate_construction_cost(building, level)
 
                             # Add housing cost for worker housing buildings
                             for worker_count, worker_type in zip(
@@ -240,7 +207,7 @@ class InvestmentsWindow(QWidget):
                                     ]
                                     # Assumes housing only provides for one type of worker at a time. This will be a bug otherwise.
                                     housing_cost = (
-                                        _calculate_construction_cost(
+                                        calculate_construction_cost(
                                             housing_building, level
                                         )
                                         * worker_count
@@ -268,11 +235,11 @@ class InvestmentsWindow(QWidget):
                         res = find_best_recipe_for_building(building.id, max_tech_level)
                         if not res:
                             continue
-                        recipe_name, profit_per_hour, _, _ = res
+                        recipe, base_profit_per_hour, _, _ = res
 
                         # Add to running total for specialization tech profits
                         # Find number of buildings currently in use
-                        num_building_levels = 0.0
+                        num_building_levels = 0
                         for base in self.base_dict.values():
                             num_building_levels += sum(
                                 slot.building.level
@@ -281,11 +248,17 @@ class InvestmentsWindow(QWidget):
                             )
                         if num_building_levels > 0:
                             tech_profit_dict[specialization] = (
-                                profit_per_hour * num_building_levels
+                                base_profit_per_hour * num_building_levels
                                 + tech_profit_dict.get(specialization, 0.0)
                             )
 
                         # Calculate ROI in days (cost / profit per hour / 24)
+                        maintenance_cost_per_hour = calculate_maintenance_cost(
+                            recipe, building
+                        )
+                        profit_per_hour = (
+                            base_profit_per_hour - maintenance_cost_per_hour
+                        )
                         roi_days = (
                             base_cost / profit_per_hour / 24
                             if profit_per_hour > 0
@@ -293,6 +266,7 @@ class InvestmentsWindow(QWidget):
                         )
 
                         # Add to table data
+                        recipe_name = GameDataManager.get_item_name(recipe.output.id)
                         self.table_data.append(
                             [
                                 f"{building.name} ({recipe_name})",
@@ -304,6 +278,12 @@ class InvestmentsWindow(QWidget):
 
                         if upgrade_cost is not None and upgrade_cost > 0:
                             # Calculate ROI for upgrade
+                            maintenance_cost_per_hour = calculate_maintenance_cost(
+                                recipe, building, building_min_level[building.id] + 1
+                            )
+                            profit_per_hour = (
+                                base_profit_per_hour - maintenance_cost_per_hour
+                            )
                             upgrade_roi_days = (
                                 upgrade_cost / profit_per_hour / 24
                                 if profit_per_hour > 0
