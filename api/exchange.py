@@ -74,6 +74,15 @@ class Exchange(QObject):
                     listing1.dataframe = listing1.dataframe.combine_first(
                         listing2.dataframe
                     )
+                # Downsample dataframes to keep only one entry every 30 min
+                for listing in Exchange.listings.values():
+                    if not listing.dataframe.empty:
+                        # Convert index to DatetimeIndex if it's not already
+                        if not isinstance(listing.dataframe.index, pd.DatetimeIndex):
+                            listing.dataframe.index = pd.to_datetime(
+                                listing.dataframe.index, format="ISO8601"
+                            )
+                        listing.dataframe = listing.dataframe.resample("30min").mean()
                 # delete cache2 after merging
                 cache2_path.unlink()
                 _logger.info("Merged additional game data from second cache file.")
