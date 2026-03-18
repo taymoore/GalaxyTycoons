@@ -12,6 +12,7 @@ import utils
 from api.gameData import GameDataManager
 from api.exchange import Exchange
 from api.company import CompanyDataManager
+from api.wishlist import WishlistDataManager
 from configurationUi import ConfigurationWindow
 from recipeUi import RecipeWindow
 from planetsUi import PlanetsWindow
@@ -24,6 +25,7 @@ _logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
     fetch_company_signal = Signal()
+    fetch_wishlist_signal = Signal()
 
     def __init__(self):
         super().__init__()
@@ -62,6 +64,14 @@ class MainWindow(QMainWindow):
         self.company_thread.finished.connect(self.company_data_manager.deleteLater)
         self.fetch_company_signal.connect(self.company_data_manager.fetch_company)
 
+        # Create wishlist data manager on its own thread
+        self.wishlist_data_manager = WishlistDataManager()
+        self.wishlist_thread = QThread(self)
+        self.wishlist_thread.setObjectName("WishlistThread")
+        self.wishlist_data_manager.moveToThread(self.wishlist_thread)
+        self.wishlist_thread.finished.connect(self.wishlist_data_manager.deleteLater)
+        self.fetch_wishlist_signal.connect(self.wishlist_data_manager.fetch_wishlists)
+
         # Initialize the sub-windows
         self.recipe_tab = RecipeWindow(self, self.recipe_worker, self.settings)
         # self.planets_tab = PlanetsWindow(self)
@@ -77,6 +87,7 @@ class MainWindow(QMainWindow):
         # Start background threads
         self.recipe_worker_thread.start()
         self.company_thread.start()
+        self.wishlist_thread.start()
 
         # Add tabs
         self.tabs.addTab(self.recipe_tab, "Recipes & Profits")
@@ -109,6 +120,9 @@ class MainWindow(QMainWindow):
         # Start loading company data
         self.fetch_company_signal.emit()
 
+        # Refresh wishlist data
+        self.fetch_wishlist_signal.emit()
+
     @Slot(int)
     def handle_tab_change(self, index: int) -> None:
         if index >= self.tabs.indexOf(self.configuration_tab):
@@ -118,7 +132,7 @@ class MainWindow(QMainWindow):
     def handle_base_loaded(self, base: Base) -> None:
         if base.id not in self.base_uis.keys():
             self.base_uis[base.id] = BaseWindow(
-                self, base.id, self.company_data_manager.fetch_company()
+                self, base.id, base.planet_id, self.company_data_manager.fetch_company()
             )
             self.tabs.addTab(self.base_uis[base.id], base.name)
             self.company_data_manager.base_loaded.connect(
@@ -129,6 +143,9 @@ class MainWindow(QMainWindow):
             )
             self.base_uis[base.id].update_tab_name_signal.connect(self.update_tab_name)
             self.base_uis[base.id].handle_base_loaded(base)
+            self.base_uis[base.id].add_to_wishlist_signal.connect(
+                self.wishlist_data_manager.add_items_to_wishlist
+            )
 
     @Slot(int, str)
     def update_tab_name(self, base_id: int, new_name: str) -> None:
@@ -181,6 +198,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_data(self) -> None:
         self.company_data_manager.fetch_company(force=True)
+        self.wishlist_data_manager.fetch_wishlists()
 
     def _copy_listings_to_clipboard(self) -> None:
         """Copy all listings to clipboard in tab-separated format for Excel."""
@@ -273,8 +291,10 @@ class MainWindow(QMainWindow):
         self.recipe_worker_thread.requestInterruption()
         self.recipe_worker.wake_up()
         self.company_data_manager.request_stop()
+        self.wishlist_data_manager.request_stop()
         self.recipe_worker_thread.quit()
         self.company_thread.quit()
+        self.wishlist_thread.quit()
         if self.recipe_worker_thread.wait(5000):
             _logger.debug("RecipeWorker thread has stopped successfully.")
         else:
@@ -283,6 +303,10 @@ class MainWindow(QMainWindow):
             _logger.debug("Company thread has stopped successfully.")
         else:
             _logger.debug("Company thread did not stop in time.")
+        if self.wishlist_thread.wait(5000):
+            _logger.debug("Wishlist thread has stopped successfully.")
+        else:
+            _logger.debug("Wishlist thread did not stop in time.")
 
         # Manually call closeEvent on tabs to trigger their specific cleanup logic
         self.recipe_tab.close()

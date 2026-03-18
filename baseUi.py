@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
     QToolBox,
     QVBoxLayout,
     QWidget,
+    QPushButton,
 )
 
 from api.exchange import Exchange
@@ -66,7 +67,13 @@ from api.models.company import (
     Technology,
 )
 from api.models.exchange import Listing
-from api.models.gameData import Building, Recipe, Specialization, WorkerType
+from api.models.gameData import (
+    Building,
+    MaterialAmount,
+    Recipe,
+    Specialization,
+    WorkerType,
+)
 from recipeWorker import RecipeWorker
 from settings import Settings
 from utils import (
@@ -128,6 +135,8 @@ class IntegerDelegate(QStyledItemDelegate):
 
 
 class BaseWindow(QWidget):
+
+    add_to_wishlist_signal = Signal(int, list)
 
     class RecipeStatus(IntEnum):
         IN_PROGRESS = 1
@@ -975,10 +984,17 @@ class BaseWindow(QWidget):
 
     update_tab_name_signal = Signal(int, str)
 
-    def __init__(self, parent: QWidget, base_id: int, company: Company | None = None):
+    def __init__(
+        self,
+        parent: QWidget,
+        base_id: int,
+        planet_id: int,
+        company: Company | None = None,
+    ):
         super().__init__(parent)
 
         self.base_id = base_id
+        self.planet_id = planet_id
         self.technology_levels: Dict[int, int] = (
             {technology.id: technology.level for technology in company.technologies}
             if company
@@ -1034,6 +1050,11 @@ class BaseWindow(QWidget):
         target_weight_layout.addWidget(target_weight_label)
         target_weight_layout.addWidget(self.target_weight_input)
         control_layout.addLayout(target_weight_layout)
+
+        # Create add to wishlist button
+        self.add_to_wishlist_button = QPushButton("Add to Wishlist", self)
+        control_layout.addWidget(self.add_to_wishlist_button)
+        self.add_to_wishlist_button.clicked.connect(self.handle_add_to_wishlist)
 
         control_layout.addStretch()  # Push controls to the top
 
@@ -1171,6 +1192,24 @@ class BaseWindow(QWidget):
                         index, new_amount, Qt.ItemDataRole.EditRole
                     )
                     break
+
+    @Slot()
+    def handle_add_to_wishlist(self) -> None:
+        """Handle adding the selected recipes to the wishlist."""
+        wishlist_items: Dict[int, MaterialAmount] = {}
+        for item in self.recipe_table_model._data:
+            if item.amount_to_buy and item.amount_to_buy > 0:
+                recipe = GameDataManager.get_recipe_by_id(item.recipe_id)
+                for consumable in recipe.inputs:
+                    material = GameDataManager.get_material_by_id(consumable.id)
+                    wishlist_items[material.id] = MaterialAmount(
+                        id=material.id,
+                        am=wishlist_items.get(
+                            material.id, MaterialAmount(id=material.id, am=0)
+                        ).am
+                        + consumable.am * item.amount_to_buy,
+                    )
+        self.add_to_wishlist_signal.emit(self.planet_id, list(wishlist_items.values()))
 
     @Slot(Company)
     def handle_company_loaded(self, company: Company) -> None:
