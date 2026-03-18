@@ -26,6 +26,7 @@ from PySide6.QtGui import (
     QBrush,
     QCloseEvent,
     QColor,
+    QDoubleValidator,
     QIntValidator,
     QPainter,
     QPalette,
@@ -341,7 +342,7 @@ class BaseWindow(QWidget):
 
     class BuildingTableModel(QAbstractTableModel):
         class BuildingItem(BaseModel):
-            building_name: str
+            building: Building
             total_duration: (
                 float  # Total duration in hours for all recipes in this building
             )
@@ -370,13 +371,13 @@ class BaseWindow(QWidget):
 
             if role == Qt.ItemDataRole.DisplayRole:
                 if col == 0:  # Building name
-                    return self._data[row].building_name
+                    return self._data[row].building.name
                 elif col == 1:  # Total duration
                     return f"{self._data[row].total_duration:.2f}h"
 
             elif role == Qt.ItemDataRole.UserRole:
                 if col == 0:  # Building name - for sorting
-                    return self._data[row].building_name.lower()
+                    return self._data[row].building.name.lower()
                 elif col == 1:  # Total duration - for sorting
                     return self._data[row].total_duration
 
@@ -400,7 +401,7 @@ class BaseWindow(QWidget):
             reverse = order == Qt.SortOrder.DescendingOrder
 
             if column == 0:  # Building name
-                self._data.sort(key=lambda x: x.building_name.lower(), reverse=reverse)
+                self._data.sort(key=lambda x: x.building.name.lower(), reverse=reverse)
             elif column == 1:  # Total duration
                 self._data.sort(key=lambda x: x.total_duration, reverse=reverse)
 
@@ -417,7 +418,7 @@ class BaseWindow(QWidget):
             for building_id, total_duration in building_durations.items():
                 self._data.append(
                     self.BuildingItem(
-                        building_name=GameDataManager.get_building(building_id).name,
+                        building=GameDataManager.get_building(building_id),
                         total_duration=total_duration,
                     )
                 )
@@ -479,7 +480,7 @@ class BaseWindow(QWidget):
             profit_per_hour: Optional[float] = None
             current_output_price: Optional[float] = None
             average_output_price: Optional[float] = None
-            building_name: Optional[str] = None
+            building: Optional[Building] = None
             status: "BaseWindow.RecipeStatus"
             duration: Optional[float] = (
                 None  # Duration in hours, calculated from recipe time and building speed
@@ -572,7 +573,7 @@ class BaseWindow(QWidget):
                 elif col == 6:  # In progress
                     return self._data[row].status.name.replace("_", " ").title()
                 elif col == 7:  # Building name
-                    return self._data[row].building_name
+                    return self._data[row].building.name
 
             elif role == Qt.ItemDataRole.UserRole:
                 if col == 0:  # Recipe name - provide output name for sorting
@@ -613,7 +614,7 @@ class BaseWindow(QWidget):
                 elif col == 6:
                     return self._data[row].status.value
                 elif col == 7:
-                    return self._data[row].building_name
+                    return self._data[row].building.name
 
             return None
 
@@ -740,16 +741,20 @@ class BaseWindow(QWidget):
             elif column == 7:  # Building name - use profit as secondary sort
                 self._data.sort(
                     key=lambda x: (
-                        x.building_name.lower(),
+                        x.building.name.lower(),
                         x.profit_per_hour is None,
                         (
-                            -x.profit_per_hour
-                            if x.profit_per_hour is not None
-                            else float("inf")
-                        ) if not reverse else (
-                            x.profit_per_hour
-                            if x.profit_per_hour is not None
-                            else float("-inf")
+                            (
+                                -x.profit_per_hour
+                                if x.profit_per_hour is not None
+                                else float("inf")
+                            )
+                            if not reverse
+                            else (
+                                x.profit_per_hour
+                                if x.profit_per_hour is not None
+                                else float("-inf")
+                            )
                         ),
                     ),
                     reverse=reverse,
@@ -796,8 +801,7 @@ class BaseWindow(QWidget):
                         recipe_item.amount,
                     )
 
-                if recipe_item.building_name is None:
-                    recipe_item.building_name = building.name if building else "Unknown"
+                recipe_item.building = building
 
                 if recipe_item.profit_per_hour is None:
                     result = calculate_profit_and_consumables(recipe, tech_level)
@@ -819,7 +823,7 @@ class BaseWindow(QWidget):
             # Sort by Building (ascending) then Profit/hr (descending) by default
             self._data.sort(
                 key=lambda x: (
-                    x.building_name.lower() if x.building_name else "",
+                    x.building.name.lower() if x.building else "",
                     x.profit_per_hour is None,
                     (
                         -x.profit_per_hour
@@ -1021,6 +1025,16 @@ class BaseWindow(QWidget):
         self.total_weight_label = QLabel("Total weight: N/A", self)
         control_layout.addWidget(self.total_weight_label)
 
+        # Create target weight input
+        target_weight_layout = QHBoxLayout()
+        target_weight_label = QLabel("Target weight:", self)
+        self.target_weight_input = QLineEdit(self)
+        self.target_weight_input.setValidator(QIntValidator(0, 1000000, self))
+        self.target_weight_input.textChanged.connect(self.handle_target_weight_changed)
+        target_weight_layout.addWidget(target_weight_label)
+        target_weight_layout.addWidget(self.target_weight_input)
+        control_layout.addLayout(target_weight_layout)
+
         control_layout.addStretch()  # Push controls to the top
 
         # Set the layout on the control widget and add to splitter
@@ -1094,8 +1108,72 @@ class BaseWindow(QWidget):
         """
         self.calculate_total_weight()
 
+    @Slot(str)
+    def handle_target_weight_changed(self, text: str) -> None:
+        target_weight = (int(text) if text else 0.0) - self.calculate_total_weight()
+        if target_weight > 0:
+            # Find building with shortest duration
+            if not self.building_summary_model._data:
+                return
+
+            shortest_building = min(
+                self.building_summary_model._data, key=lambda x: x.total_duration
+            )
+
+            # Find recipe with highest profit per hour that utilizes that building
+            best_recipe_item = None
+            best_profit = float("-inf")
+
+            for item in self.recipe_table_model._data:
+                if (
+                    item.building.id == shortest_building.building.id
+                    and item.profit_per_hour is not None
+                    and item.profit_per_hour > best_profit
+                ):
+                    best_profit = item.profit_per_hour
+                    best_recipe_item = item
+
+            assert (
+                best_recipe_item is not None
+            ), f"No recipe found for building {shortest_building.building.name}."
+
+            # Find the quantity of that recipe we can produce with the target weight of materials
+            recipe = GameDataManager.get_recipe_by_id(best_recipe_item.recipe_id)
+            assert (
+                recipe is not None
+            ), f"Recipe with ID {best_recipe_item.recipe_id} not found in game data."
+
+            # Calculate total weight per recipe execution
+            weight_per_recipe = 0.0
+            for consumable in recipe.inputs:
+                material = GameDataManager.get_material_by_id(consumable.id)
+                if material:
+                    weight_per_recipe += material.weight * consumable.am
+
+            assert (
+                weight_per_recipe > 0
+            ), f"Recipe {recipe.id} has zero total weight for its inputs."
+
+            # Calculate quantity that can be produced with target weight
+            quantity = int(target_weight / weight_per_recipe)
+
+            # Set the 'To buy' value for that recipe to the calculated quantity (adding to any existing value)
+            current_amount = best_recipe_item.amount_to_buy or 0
+            new_amount = current_amount + quantity
+
+            # Find the row index for this recipe item
+            for row, item in enumerate(self.recipe_table_model._data):
+                if item.recipe_id == best_recipe_item.recipe_id:
+                    # Create a model index for the "To buy" column (column 1)
+                    index = self.recipe_table_model.index(row, 1)
+                    # Use setData to update the value, which will trigger signals
+                    self.recipe_table_model.setData(
+                        index, new_amount, Qt.ItemDataRole.EditRole
+                    )
+                    break
+
     @Slot(Company)
-    def handle_company_loaded(self, company: Company):
+    def handle_company_loaded(self, company: Company) -> None:
         self.technology_levels = {
             technology.id: technology.level for technology in company.technologies
         }
