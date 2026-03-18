@@ -352,14 +352,13 @@ class BaseWindow(QWidget):
     class BuildingTableModel(QAbstractTableModel):
         class BuildingItem(BaseModel):
             building: Building
-            total_duration: (
-                float  # Total duration in hours for all recipes in this building
-            )
+            in_progress_duration: float
+            to_buy_duration: Optional[float] = None
 
         def __init__(self, parent: QWidget):
             super().__init__(parent)
             self._data: List[BaseWindow.BuildingTableModel.BuildingItem] = []
-            self._headers = ["Building", "Total Duration"]
+            self._headers = ["Building", "Duration", "Duration with To Buy"]
 
             # Create delegates
             self.building_delegate = BuildingColorDelegate(parent)
@@ -381,14 +380,25 @@ class BaseWindow(QWidget):
             if role == Qt.ItemDataRole.DisplayRole:
                 if col == 0:  # Building name
                     return self._data[row].building.name
-                elif col == 1:  # Total duration
-                    return f"{self._data[row].total_duration:.2f}h"
+                elif col == 1:  # in progress duration
+                    return f"{self._data[row].in_progress_duration:.2f}h"
+                elif col == 2:  # in progress + to buy duration
+                    duration = self._data[row].in_progress_duration + (
+                        self._data[row].to_buy_duration or 0
+                    )
+                    return f"{duration:.2f}h"
 
             elif role == Qt.ItemDataRole.UserRole:
                 if col == 0:  # Building name - for sorting
                     return self._data[row].building.name.lower()
-                elif col == 1:  # Total duration - for sorting
-                    return self._data[row].total_duration
+                elif col == 1:  # duration - for sorting
+                    return self._data[row].in_progress_duration
+                elif (
+                    col == 2
+                ):  # in progress + to buy duration - for sorting and delegate
+                    return self._data[row].in_progress_duration + (
+                        self._data[row].to_buy_duration or 0
+                    )
 
             return None
 
@@ -412,7 +422,12 @@ class BaseWindow(QWidget):
             if column == 0:  # Building name
                 self._data.sort(key=lambda x: x.building.name.lower(), reverse=reverse)
             elif column == 1:  # Total duration
-                self._data.sort(key=lambda x: x.total_duration, reverse=reverse)
+                self._data.sort(key=lambda x: x.in_progress_duration, reverse=reverse)
+            elif column == 2:  # Total duration with to buy
+                self._data.sort(
+                    key=lambda x: x.in_progress_duration + (x.to_buy_duration or 0),
+                    reverse=reverse,
+                )
 
             self.layoutChanged.emit()
 
@@ -428,21 +443,28 @@ class BaseWindow(QWidget):
                 self._data.append(
                     self.BuildingItem(
                         building=GameDataManager.get_building(building_id),
-                        total_duration=total_duration,
+                        in_progress_duration=total_duration,
                     )
                 )
 
             # Sort by total duration descending by default
-            self._data.sort(key=lambda x: x.total_duration, reverse=True)
+            self._data.sort(key=lambda x: x.in_progress_duration, reverse=True)
 
             # Update gradient delegate value range based on durations
             if self._data:
-                durations = [row.total_duration for row in self._data]
+                durations = [row.in_progress_duration for row in self._data]
                 min_duration = min(durations)
                 max_duration = max(durations)
                 self.duration_delegate.set_value_range(min_duration, max_duration)
 
             self.endResetModel()
+
+        def get_building_item(self, building_id: int) -> Optional[BuildingItem]:
+            """Helper method to get BuildingItem by building ID."""
+            for item in self._data:
+                if item.building.id == building_id:
+                    return item
+            return None
 
     class BuildingTableView(QTableView):
         def __init__(self, parent: QWidget):
@@ -475,6 +497,7 @@ class BaseWindow(QWidget):
             if model:
                 self.setItemDelegateForColumn(0, model.building_delegate)
                 self.setItemDelegateForColumn(1, model.duration_delegate)
+                self.setItemDelegateForColumn(2, model.duration_delegate)
 
     class RecipeTableModel(QAbstractTableModel):
         # Signal emitted when 'To buy' value changes: (recipe_id, new_value)
@@ -987,13 +1010,13 @@ class BaseWindow(QWidget):
     def __init__(
         self,
         parent: QWidget,
-        base_id: int,
+        base: Base,
         planet_id: int,
         company: Company | None = None,
     ):
         super().__init__(parent)
 
-        self.base_id = base_id
+        self.base = base
         self.planet_id = planet_id
         self.technology_levels: Dict[int, int] = (
             {technology.id: technology.level for technology in company.technologies}
@@ -1046,7 +1069,9 @@ class BaseWindow(QWidget):
         target_weight_label = QLabel("Target weight:", self)
         self.target_weight_input = QLineEdit(self)
         self.target_weight_input.setValidator(QIntValidator(0, 1000000, self))
-        self.target_weight_input.textChanged.connect(self.handle_target_weight_changed)
+        self.target_weight_input.returnPressed.connect(
+            self.handle_target_weight_changed
+        )
         target_weight_layout.addWidget(target_weight_label)
         target_weight_layout.addWidget(self.target_weight_input)
         control_layout.addLayout(target_weight_layout)
@@ -1055,6 +1080,11 @@ class BaseWindow(QWidget):
         self.add_to_wishlist_button = QPushButton("Add to Wishlist", self)
         control_layout.addWidget(self.add_to_wishlist_button)
         self.add_to_wishlist_button.clicked.connect(self.handle_add_to_wishlist)
+
+        # Create clear to-buy button
+        self.clear_to_buy_button = QPushButton("Clear To Buy", self)
+        control_layout.addWidget(self.clear_to_buy_button)
+        self.clear_to_buy_button.clicked.connect(self.handle_clear_to_buy)
 
         control_layout.addStretch()  # Push controls to the top
 
@@ -1129,8 +1159,42 @@ class BaseWindow(QWidget):
         """
         self.calculate_total_weight()
 
-    @Slot(str)
-    def handle_target_weight_changed(self, text: str) -> None:
+        # Get building for this recipe to update building summary durations
+        recipe = GameDataManager.get_recipe_by_id(recipe_id)
+        assert recipe is not None, f"Recipe with ID {recipe_id} not found in game data."
+
+        building_id = recipe.producedIn
+        building_item = self.building_summary_model.get_building_item(building_id)
+        if building_item is None:
+            _logger.warning(
+                f"Building with ID {building_id} not found in building summary model."
+            )
+            return
+
+        # Recalculate to_buy_duration for this building
+        total_to_buy_duration = 0.0
+        for item in self.recipe_table_model._data:
+            if item.amount_to_buy and item.amount_to_buy > 0:
+                item_recipe = GameDataManager.get_recipe_by_id(item.recipe_id)
+                if item_recipe and item_recipe.producedIn == building_id:
+                    tech_level = self.technology_levels.get(building_id, 0)
+                    building_count = sum(
+                        building_slot.building.level
+                        for building_slot in self.base.building_slots
+                        if building_slot.building
+                        and building_slot.building.type == building_id
+                    )
+                    assert (
+                        building_count > 0
+                    ), f"No buildings of type {building_id} found in base {self.base.name}."
+                    total_to_buy_duration += self.calculate_recipe_duration(
+                        item_recipe, tech_level, building_count, item.amount_to_buy
+                    )
+        building_item.to_buy_duration = total_to_buy_duration
+
+    @Slot()
+    def handle_target_weight_changed(self) -> None:
+        text = self.target_weight_input.text()
         target_weight = (int(text) if text else 0.0) - self.calculate_total_weight()
         if target_weight > 0:
             # Find building with shortest duration
@@ -1138,7 +1202,9 @@ class BaseWindow(QWidget):
                 return
 
             shortest_building = min(
-                self.building_summary_model._data, key=lambda x: x.total_duration
+                self.building_summary_model._data,
+                key=lambda x: x.in_progress_duration
+                + (x.to_buy_duration if x.to_buy_duration is not None else 0.0),
             )
 
             # Find recipe with highest profit per hour that utilizes that building
@@ -1148,6 +1214,7 @@ class BaseWindow(QWidget):
             for item in self.recipe_table_model._data:
                 if (
                     item.building.id == shortest_building.building.id
+                    and (item.amount_to_buy is None or item.amount_to_buy == 0)
                     and item.profit_per_hour is not None
                     and item.profit_per_hour > best_profit
                 ):
@@ -1211,6 +1278,14 @@ class BaseWindow(QWidget):
                     )
         self.add_to_wishlist_signal.emit(self.planet_id, list(wishlist_items.values()))
 
+    @Slot()
+    def handle_clear_to_buy(self) -> None:
+        """Handle clearing all 'To buy' values."""
+        for row, item in enumerate(self.recipe_table_model._data):
+            if item.amount_to_buy and item.amount_to_buy > 0:
+                index = self.recipe_table_model.index(row, 1)
+                self.recipe_table_model.setData(index, 0, Qt.ItemDataRole.EditRole)
+
     @Slot(Company)
     def handle_company_loaded(self, company: Company) -> None:
         self.technology_levels = {
@@ -1222,7 +1297,7 @@ class BaseWindow(QWidget):
 
     @Slot(Base)
     def handle_base_loaded(self, base: Base):
-        if base.id != self.base_id:
+        if base.id != self.base.id:
             return
 
         if base.warehouse is None:
@@ -1440,6 +1515,9 @@ class BaseWindow(QWidget):
         """
         Calculate the duration of a recipe in hours
         """
+        assert (
+            building_count > 0
+        ), f"Building count must be greater than 0 for recipe {recipe.id} duration calculation."
         return (
             recipe.timeMinutes
             * amount
