@@ -1,3 +1,4 @@
+from enum import Enum, IntEnum, auto
 import math
 from typing import List, Dict, Optional, Tuple
 import logging
@@ -18,9 +19,11 @@ from PySide6.QtWidgets import (
     QTableView,
     QAbstractItemView,
     QVBoxLayout,
+    QHBoxLayout,
     QWidget,
     QLabel,
     QProgressBar,
+    QCheckBox,
 )
 from PySide6.QtGui import QCloseEvent, QWheelEvent, QPixmap, QColor
 import pyqtgraph as pg
@@ -47,11 +50,27 @@ _logger = logging.getLogger(__name__)
 
 
 class InvestmentsWindow(QWidget):
+
+    class InvestmentTableData(BaseModel):
+        class InvestmentType(Enum):
+            NEW_BUILDING = auto()
+            BUILDING_UPGRADE = auto()
+            TECHNOLOGY = auto()
+
+        name: str
+        cost: float
+        profit_per_hour: float
+        roi_days: float
+        investment_type: InvestmentType
+
+        def __getitem__(self, index):
+            return (self.name, self.cost, self.profit_per_hour, self.roi_days)[index]
+
     class InvestmentsTableModel(QAbstractTableModel):
         def __init__(self, parent: QObject, settings: Settings):
             super().__init__(parent)
             self.settings = settings
-            self.table_data: List[List[str]] = []
+            self.table_data: List[InvestmentsWindow.InvestmentTableData] = []
             self.header_data: List[str] = [
                 "Building & Recipe",
                 "Construction Cost",
@@ -90,9 +109,6 @@ class InvestmentsWindow(QWidget):
         ) -> object:
             row = index.row()
             column = index.column()
-
-            if row >= len(self.table_data) or column >= len(self.table_data[row]):
-                return None
 
             data = self.table_data[row][column]
 
@@ -268,12 +284,13 @@ class InvestmentsWindow(QWidget):
                         # Add to table data
                         recipe_name = GameDataManager.get_item_name(recipe.output.id)
                         self.table_data.append(
-                            [
-                                f"{building.name} ({recipe_name})",
-                                base_cost,
-                                profit_per_hour,
-                                roi_days,
-                            ]
+                            InvestmentsWindow.InvestmentTableData(
+                                name=f"{building.name} ({recipe_name})",
+                                cost=base_cost,
+                                profit_per_hour=profit_per_hour,
+                                roi_days=roi_days,
+                                investment_type=InvestmentsWindow.InvestmentTableData.InvestmentType.NEW_BUILDING,
+                            )
                         )
 
                         if upgrade_cost is not None and upgrade_cost > 0:
@@ -290,12 +307,13 @@ class InvestmentsWindow(QWidget):
                                 else float("inf")
                             )
                             self.table_data.append(
-                                [
-                                    f"{building.name} Upgrade ({recipe_name}) [{building_min_level[building.id]}]",
-                                    upgrade_cost,
-                                    profit_per_hour,
-                                    upgrade_roi_days,
-                                ]
+                                InvestmentsWindow.InvestmentTableData(
+                                    name=f"{building.name} Upgrade ({recipe_name}) [{building_min_level[building.id]}]",
+                                    cost=upgrade_cost,
+                                    profit_per_hour=profit_per_hour,
+                                    roi_days=upgrade_roi_days,
+                                    investment_type=InvestmentsWindow.InvestmentTableData.InvestmentType.BUILDING_UPGRADE,
+                                )
                             )
                     except Exception as e:
                         _logger.error(f"Error processing building {building.name}: {e}")
@@ -350,24 +368,48 @@ class InvestmentsWindow(QWidget):
 
                     # Add to table data
                     self.table_data.append(
-                        [
-                            f"{specialization.name} Tech Level {tech_level + 1} ({recipe_name})",
-                            cost,
-                            profit_increase_per_hour,
-                            roi_days,
-                        ]
+                        InvestmentsWindow.InvestmentTableData(
+                            name=f"{specialization.name} Tech Level {tech_level + 1} ({recipe_name})",
+                            cost=cost,
+                            profit_per_hour=profit_increase_per_hour,
+                            roi_days=roi_days,
+                            investment_type=InvestmentsWindow.InvestmentTableData.InvestmentType.TECHNOLOGY,
+                        )
                     )
 
             except Exception as e:
                 _logger.error(f"Error populating investments table: {e}")
 
-            # Update min/max values for gradient coloring
-            self._update_min_max_values()
             self.endResetModel()
 
-        def _update_min_max_values(self) -> None:
-            """Update min/max values for profit and ROI columns for gradient coloring."""
+        def _update_min_max_values(
+            self, proxy_model: Optional[QSortFilterProxyModel] = None
+        ) -> None:
+            """Update min/max values for profit and ROI columns for gradient coloring.
+
+            Args:
+                proxy_model: Optional proxy model to filter rows. If provided, only visible rows are considered.
+            """
             if not self.table_data:
+                self.profit_min = 0.0
+                self.profit_max = 1.0
+                self.roi_min = 0.0
+                self.roi_max = 1000.0
+                return
+
+            # Determine which rows to consider
+            if proxy_model:
+                # Only consider rows that pass the proxy filter
+                visible_rows = [
+                    self.table_data[row]
+                    for row in range(len(self.table_data))
+                    if proxy_model.filterAcceptsRow(row, QModelIndex())
+                ]
+            else:
+                # Use all rows if no proxy model provided
+                visible_rows = self.table_data
+
+            if not visible_rows:
                 self.profit_min = 0.0
                 self.profit_max = 1.0
                 self.roi_min = 0.0
@@ -377,7 +419,7 @@ class InvestmentsWindow(QWidget):
             # Extract profit values (column 2)
             profit_values = [
                 row[2]
-                for row in self.table_data
+                for row in visible_rows
                 if isinstance(row[2], (int, float)) and row[2] > 0
             ]
             if profit_values:
@@ -389,7 +431,7 @@ class InvestmentsWindow(QWidget):
             # Extract ROI values (column 3), excluding infinity
             roi_values = [
                 row[3]
-                for row in self.table_data
+                for row in visible_rows
                 if isinstance(row[3], (int, float)) and row[3] != float("inf")
             ]
             if roi_values:
@@ -425,7 +467,17 @@ class InvestmentsWindow(QWidget):
             self.resizeColumnsToContents()
 
     class InvestmentsTableProxyModel(QSortFilterProxyModel):
-        def __init__(self, parent=None):
+        def __init__(
+            self,
+            parent: QObject,
+            investments_filter_cb_dict: Dict[
+                "InvestmentsWindow.InvestmentTableData.InvestmentType", QCheckBox
+            ],
+        ):
+            self.investement_filter_cb_dict: Dict[
+                InvestmentsWindow.InvestmentTableData.InvestmentType, QCheckBox
+            ] = investments_filter_cb_dict
+
             super().__init__(parent)
             self.setDynamicSortFilter(True)
 
@@ -456,6 +508,16 @@ class InvestmentsWindow(QWidget):
             # Fall back to default comparison
             return super().lessThan(source_left, source_right)
 
+        def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+            source_model = self.sourceModel()
+            assert isinstance(source_model, InvestmentsWindow.InvestmentsTableModel)
+            investement_table_data = source_model.table_data[source_row]
+            investment_type = investement_table_data.investment_type
+            filter_cb = self.investement_filter_cb_dict.get(investment_type)
+            if filter_cb and not filter_cb.isChecked():
+                return False
+            return super().filterAcceptsRow(source_row, source_parent)
+
     def __init__(self, parent, settings: Settings) -> None:
         super().__init__(parent)
 
@@ -470,21 +532,50 @@ class InvestmentsWindow(QWidget):
         )
         self.main_layout.addWidget(header_label)
 
-        # Add description label
-        description_label = QLabel(
-            "This table shows the return on investment (ROI) for each building based on its "
-            "construction cost and the most profitable recipe it can produce."
-        )
-        description_label.setWordWrap(True)
-        self.main_layout.addWidget(description_label)
+        # Filters layout
+        filters_layout = QHBoxLayout()
+        filter_new_building_checkbox = QCheckBox("New Buildings")
+        filter_new_building_checkbox.setChecked(True)
+        filters_layout.addWidget(filter_new_building_checkbox)
+        filter_building_upgrade_checkbox = QCheckBox("Building Upgrades")
+        filter_building_upgrade_checkbox.setChecked(True)
+        filters_layout.addWidget(filter_building_upgrade_checkbox)
+        filter_technology_checkbox = QCheckBox("Technologies")
+        filter_technology_checkbox.setChecked(True)
+        filters_layout.addWidget(filter_technology_checkbox)
+        self.main_layout.addLayout(filters_layout)
 
         # Investments table
         self.investments_table_model = InvestmentsWindow.InvestmentsTableModel(
             self, settings
         )
         self.investments_table_view = InvestmentsWindow.InvestmentsTableView(self)
-        self.investments_table_proxy_model = (
-            InvestmentsWindow.InvestmentsTableProxyModel(self)
+        self.investments_table_proxy_model = InvestmentsWindow.InvestmentsTableProxyModel(
+            self,
+            {
+                InvestmentsWindow.InvestmentTableData.InvestmentType.NEW_BUILDING: filter_new_building_checkbox,
+                InvestmentsWindow.InvestmentTableData.InvestmentType.BUILDING_UPGRADE: filter_building_upgrade_checkbox,
+                InvestmentsWindow.InvestmentTableData.InvestmentType.TECHNOLOGY: filter_technology_checkbox,
+            },
+        )
+        filter_new_building_checkbox.stateChanged.connect(
+            self.investments_table_proxy_model.invalidate
+        )
+        filter_building_upgrade_checkbox.stateChanged.connect(
+            self.investments_table_proxy_model.invalidate
+        )
+        filter_technology_checkbox.stateChanged.connect(
+            self.investments_table_proxy_model.invalidate
+        )
+        # Update min/max values when filter changes
+        filter_new_building_checkbox.stateChanged.connect(
+            self._update_filtered_min_max_values
+        )
+        filter_building_upgrade_checkbox.stateChanged.connect(
+            self._update_filtered_min_max_values
+        )
+        filter_technology_checkbox.stateChanged.connect(
+            self._update_filtered_min_max_values
         )
         self.investments_table_proxy_model.setSourceModel(self.investments_table_model)
         self.investments_table_view.setModel(self.investments_table_proxy_model)
@@ -501,6 +592,9 @@ class InvestmentsWindow(QWidget):
         # Populate the table with buildings data
         self.investments_table_model.populate_investments()
 
+        # Update min/max values based on initial filter state
+        self._update_filtered_min_max_values()
+
         # Update status label
         row_count = self.investments_table_model.rowCount()
         self.status_label.setText(
@@ -509,6 +603,20 @@ class InvestmentsWindow(QWidget):
 
         # Set default sort to ROI column (ascending)
         self.investments_table_view.sortByColumn(3, Qt.SortOrder.AscendingOrder)
+
+    def _update_filtered_min_max_values(self) -> None:
+        """Update min/max values for gradient coloring based on filtered rows."""
+        self.investments_table_model._update_min_max_values(
+            self.investments_table_proxy_model
+        )
+        # Trigger a refresh of the visible cells to update colors
+        top_left = self.investments_table_model.index(0, 2)
+        bottom_right = self.investments_table_model.index(
+            self.investments_table_model.rowCount() - 1, 3
+        )
+        self.investments_table_model.dataChanged.emit(
+            top_left, bottom_right, [Qt.ItemDataRole.BackgroundRole]
+        )
 
     @Slot(Specialization, int)
     def handle_tech_slider_changed(self, specialization, tech_level) -> None:
@@ -535,6 +643,7 @@ class InvestmentsWindow(QWidget):
         """Perform the actual recalculation of ROI values."""
         try:
             self.investments_table_model.populate_investments()
+            self._update_filtered_min_max_values()
             row_count = self.investments_table_model.rowCount()
             self.status_label.setText(
                 f"Showing {row_count} buildings with profitable recipes"
@@ -547,3 +656,4 @@ class InvestmentsWindow(QWidget):
         """Handle a new base being loaded."""
         self.investments_table_model.base_dict[base.id] = base
         self.investments_table_model.populate_investments()
+        self._update_filtered_min_max_values()

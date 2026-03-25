@@ -1,3 +1,5 @@
+# TODO: Don't erase To buy on refresh
+# TODO: Subtract materials already at destination from to buy
 from enum import IntEnum
 import logging
 import math
