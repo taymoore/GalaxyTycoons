@@ -1396,6 +1396,17 @@ class BaseWindow(QWidget):
             )
             recipe_item.duration = duration
 
+        # Add missing buildings
+        for building_type in building_types:
+            building = GameDataManager.get_building(building_type)
+            assert (
+                building is not None
+            ), f"Building with ID {building_type} not found in game data."
+            if building.specialization is Specialization.NONE:
+                continue
+            if building_type not in building_durations:
+                building_durations[building_type] = np.nan
+
         # Populate the BuildingSummaryTable with building durations
         self.building_summary_model.set_building_durations(building_durations)
 
